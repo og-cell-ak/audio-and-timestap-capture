@@ -3,8 +3,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
-    <application android:theme="@style/AppTheme" android:label="Audio Timestamp Capture" android:allowBackup="false">
-        <activity android:name=".MainActivity" android:screenOrientation="landscape" android:exported="true">
+    <application android:theme="@style/AppTheme" android:label="Audio Timestamp Studio" android:allowBackup="false">
+        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
