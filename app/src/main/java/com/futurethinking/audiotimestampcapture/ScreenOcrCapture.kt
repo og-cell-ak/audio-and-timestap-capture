@@ -12,6 +12,7 @@ import android.os.Looper
 import android.os.SystemClock
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 class ScreenOcrCapture(
@@ -21,7 +22,8 @@ class ScreenOcrCapture(
     private val onLines: (List<ScreenLine>) -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    private val latinRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    private val devanagariRecognizer = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
     private var reader: ImageReader? = null
     private var display: VirtualDisplay? = null
     private var lastScan = 0L
@@ -84,15 +86,26 @@ class ScreenOcrCapture(
         val bottom = (layout.top * full.height + (layout.bottom-layout.top) * full.height * (index + 1) / layout.lineCount)
             .toInt().coerceIn(top + 1, full.height)
         val crop = Bitmap.createBitmap(full, left, top, right-left, bottom-top)
-        recognizer.process(InputImage.fromBitmap(crop, 0))
-            .addOnSuccessListener { result ->
-                val text = result.text.replace(Regex("\\s+"), " ").trim()
-                if (text.isNotEmpty()) output.add(ScreenLine(index + 1, text, nowMs))
-            }
-            .addOnCompleteListener {
-                crop.recycle()
-                processLines(full, layout, nowMs, index + 1, output)
-            }
+        val image=InputImage.fromBitmap(crop, 0)
+        var completed=0
+        var latinText=""
+        var devanagariText=""
+        fun done(){
+            completed++
+            if(completed<2) return
+            val latin=latinText.replace(Regex("\\s+"), " ").trim()
+            val dev=devanagariText.replace(Regex("\\s+"), " ").trim()
+            val text=if(dev.length>latin.length) dev else latin
+            if(text.isNotEmpty()) output.add(ScreenLine(index + 1, text, nowMs))
+            crop.recycle()
+            processLines(full, layout, nowMs, index + 1, output)
+        }
+        latinRecognizer.process(image)
+            .addOnSuccessListener { latinText=it.text }
+            .addOnCompleteListener { done() }
+        devanagariRecognizer.process(image)
+            .addOnSuccessListener { devanagariText=it.text }
+            .addOnCompleteListener { done() }
     }
 
     fun stop() {
@@ -102,6 +115,7 @@ class ScreenOcrCapture(
         display = null
         reader = null
         busy = false
-        recognizer.close()
+        latinRecognizer.close()
+        devanagariRecognizer.close()
     }
 }
