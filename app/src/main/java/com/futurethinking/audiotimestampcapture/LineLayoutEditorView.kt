@@ -17,6 +17,7 @@ class LineLayoutEditorView(context: Context) : View(context) {
     private var lastX = 0f
     private var lastY = 0f
     private var mode = 0
+    private var hasExistingLayout = false
     var rect = RectF()
         private set
     var lineCount = 5
@@ -41,16 +42,28 @@ class LineLayoutEditorView(context: Context) : View(context) {
     fun setExistingLayout(layout: LineLayout?, width: Int, height: Int) {
         if (layout == null || width <= 0 || height <= 0) return
         rect.set(layout.left * width, layout.top * height, layout.right * width, layout.bottom * height)
+        hasExistingLayout = rect.width() > 40f && rect.height() > 40f
         invalidate()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                sx = event.x; sy = event.y; lastX = sx; lastY = sy; drawing = true
-                mode = if (rect.width() > 40f && rect.height() > 40f) hitMode(sx, sy) else 0
-                if (mode == 0) { rect.set(sx, sy, sx, sy); mode = 1 }
-                invalidate(); return true
+                sx = event.x; sy = event.y; lastX = sx; lastY = sy
+                if (hasExistingLayout) {
+                    mode = hitMode(sx, sy)
+                    if (mode == 0) {
+                        drawing = false
+                        return true
+                    }
+                    drawing = true
+                } else {
+                    drawing = true
+                    rect.set(sx, sy, sx, sy)
+                    mode = 1
+                }
+                invalidate()
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
                 if (drawing) {
@@ -74,7 +87,7 @@ class LineLayoutEditorView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 drawing = false
                 mode = 0
-                if (rect.width() < 40f || rect.height() < 40f) rect.setEmpty()
+                if (!hasExistingLayout && (rect.width() < 40f || rect.height() < 40f)) rect.setEmpty()
                 invalidate(); return true
             }
         }
