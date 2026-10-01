@@ -12,6 +12,7 @@ import android.os.*
 import android.provider.Settings
 import android.view.*
 import android.widget.*
+import java.util.Locale
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
@@ -82,29 +83,38 @@ class CaptureService : Service() {
 
     private fun startListening(){
         if(!sessionActive||listening)return
-        val l=layout
-        if(l==null){sendStatus("SET LINES and SAVE LAYOUT first");return}
+        if(layout==null){sendStatus("SET LINES and SAVE LAYOUT first");return}
         listening=true
         ocr=ScreenOcrCapture(this,projection!!,{layout}){lines->
             latestLines=lines
             guide?.lineTexts=lines
         }
         ocr!!.start()
-        speech=LiveSpeechTimer(this,{partial,ms->
-            val used=matches.map{it.panelNumber}.toSet()
-            val line=TimestampEngine.bestLine(latestLines,partial,used)
-            guide?.highlightLine=line?.index?:-1
-            guide?.highlightWord=partial.split(Regex("\\s+")).lastOrNull().orEmpty()
-        }){segment->
-            val used=matches.map{it.panelNumber}.toSet()
-            TimestampEngine.match(latestLines,segment,used)?.let{match->
-                if(matches.none{it.panelNumber==match.panelNumber})matches.add(match)
-                guide?.highlightLine=match.panelNumber
-                guide?.highlightWord=match.script.split(Regex("\\s+")).firstOrNull().orEmpty()
-            }
-        }
+
+        val systemLocale=Locale.getDefault()
+        val speechLocale=if(systemLocale.language.equals("hi",true)) Locale.forLanguageTag("hi-IN") else Locale.forLanguageTag("en-IN")
+        speech=LiveSpeechTimer(
+            context=this,
+            projection=projection,
+            locale=speechLocale,
+            onPartial={partial,_-> 
+                val line=TimestampEngine.bestLine(latestLines,partial,emptySet())
+                guide?.highlightLine=line?.index?:-1
+                guide?.highlightWord=partial.split(Regex("\\s+")).lastOrNull().orEmpty()
+            },
+            onSegment={segment->
+                val used=matches.map{it.panelNumber}.toSet()
+                TimestampEngine.match(latestLines,segment,used)?.let{match->
+                    if(matches.none{it.panelNumber==match.panelNumber})matches.add(match)
+                    guide?.highlightLine=match.panelNumber
+                    guide?.highlightWord=match.script.split(Regex("\\s+")).firstOrNull().orEmpty()
+                    sendStatus("MATCHED line "+match.panelNumber+" at "+format(match.timestampMs))
+                }
+            },
+            onStatus={status->sendStatus(status)}
+        )
         speech!!.start()
-        sendStatus("STARTED • reading screen and listening")
+        sendStatus("STARTED • live screen OCR + internal audio reader")
     }
 
     private fun stopListening(){
@@ -233,6 +243,7 @@ class CaptureService : Service() {
     private fun rounded(col:Int)=android.graphics.drawable.GradientDrawable().apply{setColor(col);cornerRadius=dp(16).toFloat()}
     private fun space()=Space(overlayContext?:this).apply{layoutParams=LinearLayout.LayoutParams(dp(4),1)}
     private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt().coerceAtLeast(1)
+    private fun format(ms:Long):String{val m=ms/60000;val sec=(ms%60000)/1000;val x=ms%1000;return "%02d:%02d.%03d".format(m,sec,x)}
     private fun sendStatus(s:String)=sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName).putExtra(EXTRA_MESSAGE,s))
     override fun onBind(intent:Intent?):IBinder?=null
     override fun onDestroy(){runCatching{ocr?.stop()};runCatching{speech?.stop()};hideEditor();guide?.let{runCatching{wm.removeView(it)}};bubble?.let{runCatching{wm.removeView(it)}};projection?.stop();super.onDestroy()}
