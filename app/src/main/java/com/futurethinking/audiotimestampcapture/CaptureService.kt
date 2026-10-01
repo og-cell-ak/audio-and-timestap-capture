@@ -12,6 +12,7 @@ import android.os.*
 import android.provider.Settings
 import android.view.*
 import android.widget.*
+import java.util.Locale
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
@@ -115,23 +116,46 @@ class CaptureService : Service() {
         if (!running) return
         if (layout == null) { sendStatus("SET LINES and SAVE LAYOUT first"); return }
         if (ocr != null || speech != null) return
+
         ocr = ScreenOcrCapture(this, projection!!, { layout }) { lines ->
             latestLines = lines
             guide?.lineTexts = lines
         }
         ocr!!.start()
-        speech = LiveSpeechTimer(this) { segment ->
-            val used = matches.map { it.panelNumber }.toSet()
-            val match = TimestampEngine.match(latestLines, segment, used)
-            if (match != null && matches.none { it.panelNumber == match.panelNumber }) {
-                matches.add(match)
-                guide?.highlightLine = match.panelNumber
-                sendStatus("MATCHED line ${match.panelNumber} at ${format(match.timestampMs)}")
-            }
+
+        val systemLocale = Locale.getDefault()
+        val speechLocale = if (systemLocale.language.equals("hi", true)) {
+            Locale.forLanguageTag("hi-IN")
+        } else {
+            Locale.forLanguageTag("en-IN")
         }
+
+        speech = LiveSpeechTimer(
+            context = this,
+            projection = projection,
+            locale = speechLocale,
+            onPartial = { text, _ ->
+                val preview = TimestampEngine.match(
+                    latestLines,
+                    SpokenSegment(0L, text, 1f),
+                    emptySet()
+                )
+                guide?.highlightLine = preview?.panelNumber ?: -1
+            },
+            onSegment = { segment ->
+                val used = matches.map { it.panelNumber }.toSet()
+                val match = TimestampEngine.match(latestLines, segment, used)
+                if (match != null && matches.none { it.panelNumber == match.panelNumber }) {
+                    matches.add(match)
+                    guide?.highlightLine = match.panelNumber
+                    sendStatus("MATCHED line " + match.panelNumber + " at " + format(match.timestampMs))
+                }
+            },
+            onStatus = { status -> sendStatus(status) }
+        )
         speech!!.start()
         guide?.running = true
-        sendStatus("STARTED • screen reading + audio listening")
+        sendStatus("STARTED • live screen OCR + internal audio reader")
     }
 
     private fun stopListeningOnly() {
