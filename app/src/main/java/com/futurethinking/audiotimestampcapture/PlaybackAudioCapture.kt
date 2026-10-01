@@ -8,6 +8,7 @@ import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -89,10 +90,18 @@ class PlaybackAudioCapture(
     }
 
     private fun patchWavHeader(file: File, dataLength: Int, sampleRate: Int) {
-        val bytes = file.readBytes()
-        val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        b.putInt(4, 36 + dataLength)
-        b.putInt(40, dataLength)
-        file.outputStream().use { it.write(bytes) }
+        RandomAccessFile(file, "rw").use { raf ->
+            raf.seek(4)
+            raf.writeIntLE(36 + dataLength)
+            raf.seek(40)
+            raf.writeIntLE(dataLength)
+        }
+    }
+
+    private fun RandomAccessFile.writeIntLE(value: Int) {
+        write(value and 0xFF)
+        write((value shr 8) and 0xFF)
+        write((value shr 16) and 0xFF)
+        write((value shr 24) and 0xFF)
     }
 }
