@@ -29,7 +29,7 @@ object TimestampEngine {
         if(best==null||score<0.38f)return null
         return TimedScript(spoken.startMs,best.index,clean(best.text),(score*spoken.confidence).coerceIn(0f,1f))
     }
-    fun ordered(rows:Collection<TimedScript>):List<TimedScript>=rows.sortedBy{it.timestampMs}
+    fun ordered(rows: Collection<TimedScript>): List<TimedScript> { return rows.sortedBy { it.timestampMs } }
     private fun clean(s:String)=s.replace(Regex("""^\s*\d{1,4}[).:\-]?\s*"""),"").replace(Regex("""\s+""")," ").trim()
     private fun normalize(s:String)=s.lowercase().replace(Regex("""[^\p{L}\p{N}]+""")," ").split(Regex("""\s+""")).filter{it.length>=2}
     private fun similarity(a:List<String>,b:List<String>):Float{
