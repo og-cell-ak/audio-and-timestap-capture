@@ -11,6 +11,8 @@ class LineGuideView(context: Context) : View(context) {
         set(value) { field=value; invalidate() }
     var highlightLine=-1
         set(value) { field=value; invalidate() }
+    var running=false
+        set(value) { field=value; invalidate() }
     var highlightWord=""
         set(value) { field=value; invalidate() }
     var lineTexts: List<ScreenLine> = emptyList()
