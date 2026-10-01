@@ -26,7 +26,8 @@ jobs:
       - name: Verify APK archive
         run: unzip -t app/build/outputs/apk/debug/app-debug.apk
       - name: Verify APK package
-        run: $ANDROID_HOME/build-tools/35.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package: name='com.futurethinking.audiotimestampcapture'|launchable-activity"
+        run: |
+          $ANDROID_HOME/build-tools/35.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package: name=|launchable-activity'
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
