@@ -8,33 +8,31 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
-import android.widget.Button
+import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import java.io.File
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
-    private lateinit var markerStatus: TextView
-    private lateinit var outputStatus: TextView
-    private lateinit var startButton: Button
-    private lateinit var stopButton: Button
-    private lateinit var saveButton: Button
-    private lateinit var freshButton: Button
+    private lateinit var markers: TextView
+    private lateinit var scriptStatus: TextView
+    private lateinit var startButton: TextView
+    private lateinit var stopButton: TextView
+    private lateinit var downloadButton: TextView
+    private lateinit var freshButton: TextView
 
     private var projection: android.media.projection.MediaProjection? = null
     private var screenCapture: ScreenOcrCapture? = null
-    private var audioCapture: PlaybackAudioCapture? = null
     private var speechTimer: LiveSpeechTimer? = null
     private val panels = mutableListOf<PanelReference>()
     private val speech = mutableListOf<SpokenSegment>()
-    private var audioFile: File? = null
-    private var pdfFile: File? = null
+    private var pdfUri: android.net.Uri? = null
     private var capturing = false
-    private var generated = false
+    private var building = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,117 +40,133 @@ class MainActivity : Activity() {
     }
 
     private fun buildUi() {
-        window.statusBarColor = Color.rgb(8, 14, 31)
-        window.navigationBarColor = Color.rgb(8, 14, 31)
+        window.statusBarColor = Color.rgb(8, 12, 28)
+        window.navigationBarColor = Color.rgb(8, 12, 28)
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 28, 24, 24)
-            setBackgroundColor(Color.rgb(8, 14, 31))
+            setPadding(22, 26, 22, 30)
+            setBackgroundColor(Color.rgb(8, 12, 28))
         }
-        val scroll = ScrollView(this).apply { isFillViewport = true; addView(root) }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        }
 
-        root.addView(TextView(this).apply {
-            text = "Audio Timestamp Studio"
-            textSize = 30f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setPadding(4, 0, 4, 8)
-        })
-        root.addView(TextView(this).apply {
-            text = "Record the audio separately and detect only the reference numbers on your screen. Those numbers become the timestamps for the script PDF."
-            textSize = 15f
-            setTextColor(Color.rgb(190, 201, 224))
-            setPadding(4, 0, 4, 22)
-        })
+        root.addView(title("Audio Timestamp Studio", 30f, Color.WHITE))
+        root.addView(body("Reads the reference numbers from the screen and listens to the narration. Each new number becomes the timestamp for the next script section.", 15f))
 
-        val session = card()
-        session.addView(label("CAPTURE SESSION"))
-        status = body("Ready for a new capture.")
-        session.addView(status)
-        root.addView(session)
+        val live = card()
+        live.addView(label("LIVE CAPTURE"))
+        status = body("Ready. Press START CAPTURE, then switch to the content you want to analyse.", 17f)
+        live.addView(status)
+        root.addView(live)
 
-        val refs = card()
-        refs.addView(label("REFERENCE NUMBERS"))
-        markerStatus = body("No reference numbers detected.")
-        refs.addView(markerStatus)
-        root.addView(refs)
+        val markerCard = card()
+        markerCard.addView(label("SCREEN REFERENCES"))
+        markers = body("Waiting for reference 1.", 17f)
+        markerCard.addView(markers)
+        root.addView(markerCard)
 
-        val outputs = card()
-        outputs.addView(label("OUTPUTS"))
-        outputStatus = body("After stopping, press SAVE OUTPUTS. The WAV goes to Music/Audio Timestamp Studio and the PDF goes to Download/Audio Timestamp Studio.")
-        outputs.addView(outputStatus)
-        root.addView(outputs)
+        val scriptCard = card()
+        scriptCard.addView(label("TIMESTAMP SCRIPT"))
+        scriptStatus = body("No script captured yet.", 17f)
+        scriptCard.addView(scriptStatus)
+        root.addView(scriptCard)
 
-        startButton = button("START CAPTURE", Color.rgb(141, 76, 255))
-        startButton.setOnClickListener { startCaptureRequest() }
+        startButton = actionButton("START CAPTURE", Color.rgb(142, 78, 255))
+        startButton.setOnClickListener { requestCapture() }
         root.addView(startButton)
 
-        stopButton = button("STOP CAPTURE", Color.rgb(255, 82, 112))
+        stopButton = actionButton("STOP & BUILD PDF", Color.rgb(247, 73, 105))
         stopButton.isEnabled = false
         stopButton.alpha = 0.45f
-        stopButton.setOnClickListener { stopCaptureAndBuild() }
+        stopButton.setOnClickListener { stopAndBuild() }
         root.addView(stopButton)
 
-        saveButton = button("SAVE OUTPUTS TO PHONE", Color.rgb(20, 190, 125))
-        saveButton.isEnabled = false
-        saveButton.alpha = 0.45f
-        saveButton.setOnClickListener { saveOutputs() }
-        root.addView(saveButton)
+        downloadButton = actionButton("DOWNLOAD TIMESTAMP PDF", Color.rgb(22, 190, 126))
+        downloadButton.isEnabled = false
+        downloadButton.alpha = 0.45f
+        downloadButton.setOnClickListener { downloadPdf() }
+        root.addView(downloadButton)
 
-        freshButton = button("FRESH / NEW CAPTURE", Color.rgb(63, 83, 125))
+        freshButton = actionButton("FRESH / NEW CAPTURE", Color.rgb(55, 73, 112))
         freshButton.setOnClickListener { freshCapture() }
         root.addView(freshButton)
 
-        val info = card()
-        info.addView(label("WORKFLOW"))
-        info.addView(body("START CAPTURE → play your content → reference 1, 2, 3... are detected automatically → STOP CAPTURE → SAVE OUTPUTS.\n\nThe screen is used only to detect the numbers. No panels need to be displayed inside this app. Audio and timestamped PDF are saved as two separate files."))
-        root.addView(info)
+        val how = card()
+        how.addView(label("HOW IT WORKS"))
+        how.addView(body(
+            "1. Press START CAPTURE.\n" +
+            "2. Give screen-capture permission.\n" +
+            "3. Switch to your source content.\n" +
+            "4. The app watches only for reference numbers 1, 2, 3...\n" +
+            "5. The narration is listened to live but is NOT saved as an audio file.\n" +
+            "6. When the next number appears, its capture time becomes the next timestamp.\n" +
+            "7. Press STOP & BUILD PDF.\n" +
+            "8. Press DOWNLOAD TIMESTAMP PDF to put the PDF in Downloads.",
+            15f
+        ))
+        root.addView(how)
+
         setContentView(scroll)
     }
 
-    private fun card() = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(22, 20, 22, 20)
-        background = android.graphics.drawable.GradientDrawable().apply {
-            cornerRadius = 28f
-            setColor(Color.rgb(18, 28, 53))
-            setStroke(2, Color.rgb(42, 57, 91))
-        }
-        layoutParams = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            setMargins(0, 0, 0, 18)
-        }
+    private fun title(text: String, size: Float, color: Int) = TextView(this).apply {
+        this.text = text
+        textSize = size
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(color)
+        setPadding(2, 0, 2, 8)
     }
 
     private fun label(text: String) = TextView(this).apply {
         this.text = text
         textSize = 13f
         typeface = Typeface.DEFAULT_BOLD
-        setTextColor(Color.rgb(167, 126, 255))
+        setTextColor(Color.rgb(177, 133, 255))
         letterSpacing = 0.08f
     }
 
-    private fun body(text: String) = TextView(this).apply {
+    private fun body(text: String, size: Float) = TextView(this).apply {
         this.text = text
-        textSize = 16f
+        textSize = size
         setTextColor(Color.rgb(235, 239, 250))
-        setPadding(0, 10, 0, 2)
+        setPadding(0, 10, 0, 4)
     }
 
-    private fun button(text: String, color: Int) = Button(this).apply {
-        this.text = text
-        textSize = 16f
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(Color.WHITE)
+    private fun card() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(20, 18, 20, 18)
         background = android.graphics.drawable.GradientDrawable().apply {
-            cornerRadius = 22f
-            setColor(color)
+            cornerRadius = 28f
+            setColor(Color.rgb(18, 27, 50))
+            setStroke(2, Color.rgb(40, 55, 88))
         }
-        layoutParams = LinearLayout.LayoutParams(-1, 64).apply {
+        layoutParams = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             setMargins(0, 0, 0, 16)
         }
     }
 
-    private fun startCaptureRequest() {
+    private fun actionButton(text: String, color: Int) = TextView(this).apply {
+        this.text = text
+        textSize = 16f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(Color.WHITE)
+        gravity = Gravity.CENTER
+        isClickable = true
+        isFocusable = true
+        setPadding(18, 18, 18, 18)
+        background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = 24f
+            setColor(color)
+        }
+        layoutParams = LinearLayout.LayoutParams(-1, 68).apply {
+            setMargins(0, 0, 0, 14)
+        }
+    }
+
+    private fun requestCapture() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 900)
             return
@@ -167,32 +181,36 @@ class MainActivity : Activity() {
             status.text = "Screen capture permission was not granted."
             return
         }
-        projection = (getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(resultCode, data)
+
+        projection = (getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
+            .getMediaProjection(resultCode, data)
+
         panels.clear()
         speech.clear()
-        audioFile = File(getExternalFilesDir(null), "audio-" + System.currentTimeMillis() + ".wav")
-        pdfFile = null
-        generated = false
+        pdfUri = null
+        building = false
 
         screenCapture = ScreenOcrCapture(this, projection!!) { panel ->
             runOnUiThread {
                 if (panels.none { it.number == panel.number }) {
                     panels.add(panel)
-                    markerStatus.text = "Detected reference " + panel.number +
-                        "\nTimestamp: " + format(panel.detectedAtMs) +
-                        "\nTotal detected: " + panels.size
-                    status.text = "CAPTURING • Reference " + panel.number + " detected"
+                    val detected = panels.sortedBy { it.detectedAtMs }
+                    markers.text = detected.joinToString("\n") {
+                        "Reference " + it.number + "  •  " + format(it.detectedAtMs)
+                    }
+                    status.text = "CAPTURING • reference " + panel.number + " detected"
                 }
             }
         }
-        audioCapture = PlaybackAudioCapture(projection!!, audioFile!!)
+
         speechTimer = LiveSpeechTimer(this) { segment ->
             synchronized(speech) { speech.add(segment) }
-            runOnUiThread { outputStatus.text = "Recording audio...\nSpeech segments: " + speech.size }
+            runOnUiThread {
+                scriptStatus.text = "Listening to narration...\nSpeech segments received: " + speech.size
+            }
         }
 
         screenCapture!!.start()
-        audioCapture!!.start()
         speechTimer!!.start()
 
         capturing = true
@@ -200,88 +218,88 @@ class MainActivity : Activity() {
         startButton.alpha = 0.45f
         stopButton.isEnabled = true
         stopButton.alpha = 1f
-        saveButton.isEnabled = false
-        saveButton.alpha = 0.45f
-        status.text = "CAPTURING • Audio + reference detection active"
-        markerStatus.text = "Waiting for reference number 1..."
-        outputStatus.text = "Audio recording active..."
+        downloadButton.isEnabled = false
+        downloadButton.alpha = 0.45f
+        markers.text = "Waiting for reference 1..."
+        scriptStatus.text = "Listening to narration..."
+        status.text = "CAPTURING • screen + audio listening active"
     }
 
-    private fun stopCaptureAndBuild() {
-        if (!capturing) return
+    private fun stopAndBuild() {
+        if (!capturing || building) return
+        building = true
         capturing = false
-        status.text = "Finishing capture and building timestamp PDF..."
+        status.text = "Stopping capture and building timestamp PDF..."
 
         screenCapture?.stop()
         speechTimer?.stop()
-        audioCapture?.stop()
         projection?.stop()
         screenCapture = null
         speechTimer = null
-        audioCapture = null
         projection = null
 
         val orderedPanels = panels.sortedBy { it.detectedAtMs }
         val orderedSpeech = synchronized(speech) { speech.sortedBy { it.startMs }.toList() }
         val rows = TimestampEngine.build(orderedPanels, orderedSpeech)
-        pdfFile = if (rows.isNotEmpty()) TimestampPdfWriter.write(this, rows) else null
-        val validAudio = audioFile?.takeIf { it.exists() && it.length() > 44L }
 
-        generated = validAudio != null || pdfFile != null
-        status.text = "CAPTURE COMPLETE\nReferences: " + orderedPanels.size + "\nScript sections: " + rows.size
-        markerStatus.text = if (orderedPanels.isEmpty()) "No reference numbers detected." else
-            "Detected: " + orderedPanels.joinToString(", ") { it.number.toString() }
-        outputStatus.text = "Audio ready: " + if (validAudio != null) "YES" else "NO" +
-            "\nPDF ready: " + if (pdfFile != null) "YES" else "NO" +
-            "\n\nPress SAVE OUTPUTS TO PHONE."
+        pdfUri = if (rows.isNotEmpty()) {
+            TimestampPdfWriter.writeToDownloads(this, rows)
+        } else null
+
+        if (pdfUri != null) {
+            status.text = "CAPTURE COMPLETE • timestamp PDF ready"
+            scriptStatus.text = rows.size.toString() + " timestamped script sections created."
+            downloadButton.isEnabled = true
+            downloadButton.alpha = 1f
+        } else {
+            status.text = "No timestamped script was created."
+            scriptStatus.text = if (orderedPanels.isEmpty()) {
+                "No reference numbers were detected. Keep the numbers visible long enough for OCR to read them."
+            } else {
+                "References were detected, but no speech text was received."
+            }
+        }
 
         startButton.isEnabled = true
         startButton.alpha = 1f
         stopButton.isEnabled = false
         stopButton.alpha = 0.45f
-        saveButton.isEnabled = generated
-        saveButton.alpha = if (generated) 1f else 0.45f
+        building = false
     }
 
-    private fun saveOutputs() {
-        if (!generated) return
-        outputStatus.text = "Saving audio and PDF to phone storage..."
-        val validAudio = audioFile?.takeIf { it.exists() && it.length() > 44L }
-        val result = MediaFileExporter.publish(this, validAudio, pdfFile)
-        outputStatus.text = buildString {
-            append("SAVED TO PHONE\n\nAudio: ")
-            append(result.audioLocation ?: "Audio could not be saved")
-            append("\n\nPDF: ")
-            append(result.pdfLocation ?: "PDF could not be saved")
+    private fun downloadPdf() {
+        val uri = pdfUri ?: return
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/pdf")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        saveButton.isEnabled = false
-        saveButton.alpha = 0.65f
+        try {
+            startActivity(intent)
+        } catch (_: Throwable) {
+            Toast.makeText(this, "PDF saved in Downloads/Audio Timestamp Studio", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun freshCapture() {
         if (capturing) {
             screenCapture?.stop()
             speechTimer?.stop()
-            audioCapture?.stop()
             projection?.stop()
         }
         capturing = false
+        building = false
         panels.clear()
         speech.clear()
-        audioFile?.delete()
-        pdfFile?.delete()
-        audioFile = null
-        pdfFile = null
-        generated = false
+        pdfUri = null
         startButton.isEnabled = true
         startButton.alpha = 1f
         stopButton.isEnabled = false
         stopButton.alpha = 0.45f
-        saveButton.isEnabled = false
-        saveButton.alpha = 0.45f
+        downloadButton.isEnabled = false
+        downloadButton.alpha = 0.45f
         status.text = "Fresh capture ready."
-        markerStatus.text = "No reference numbers detected."
-        outputStatus.text = "Nothing saved. Press START CAPTURE to begin a new session."
+        markers.text = "Waiting for reference 1."
+        scriptStatus.text = "No script captured yet."
     }
 
     private fun format(ms: Long): String {
