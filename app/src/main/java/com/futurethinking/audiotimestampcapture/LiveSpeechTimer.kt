@@ -122,7 +122,7 @@ class LiveSpeechTimer(
                 }
                 if (active && !internal) restartMic()
             }
-            override fun onSegmentResults(results: Bundle?) {
+            override fun onSegmentResults(results: Bundle) {
                 hindi(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull())?.let {
                     onSegment(SpokenSegment(elapsed(), it, confidence(results)))
                     onPartial(it, elapsed())
@@ -186,7 +186,7 @@ class LiveSpeechTimer(
             .replace(Regex("[^\\u0900-\\u097F\\u0964\\u0965\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
-        return if (cleaned.any { it in '\\u0900'..'\\u097F' }) cleaned else null
+        return if (cleaned.any { it in '\u0900'..'\u097F' }) cleaned else null
     }
 
     private fun confidence(b: Bundle?): Float =
