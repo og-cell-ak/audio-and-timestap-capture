@@ -40,9 +40,22 @@ class LineLayoutEditorView(context: Context) : View(context) {
     }
 
     fun setExistingLayout(layout: LineLayout?, width: Int, height: Int) {
-        if (layout == null || width <= 0 || height <= 0) return
-        rect.set(layout.left * width, layout.top * height, layout.right * width, layout.bottom * height)
-        hasExistingLayout = rect.width() > 40f && rect.height() > 40f
+        if (layout == null || width <= 0 || height <= 0) {
+            hasExistingLayout = false
+            rect.setEmpty()
+            invalidate()
+            return
+        }
+        rect.set(
+            layout.left.coerceIn(0f, 1f) * width,
+            layout.top.coerceIn(0f, 1f) * height,
+            layout.right.coerceIn(0f, 1f) * width,
+            layout.bottom.coerceIn(0f, 1f) * height
+        )
+        lineCount = layout.lineCount
+        hasExistingLayout = rect.width() >= 40f && rect.height() >= 40f
+        drawing = false
+        mode = 0
         invalidate()
     }
 
@@ -100,7 +113,13 @@ class LineLayoutEditorView(context: Context) : View(context) {
     }
 
     fun toLayout(w: Int, h: Int): LineLayout? {
-        if (rect.width() < 40f || rect.height() < 40f) return null
-        return LineLayout(rect.left/w, rect.top/h, rect.right/w, rect.bottom/h, lineCount).normalized()
+        if (w <= 0 || h <= 0 || rect.width() < 40f || rect.height() < 40f) return null
+        return LineLayout(
+            (rect.left / w.toFloat()).coerceIn(0f, 1f),
+            (rect.top / h.toFloat()).coerceIn(0f, 1f),
+            (rect.right / w.toFloat()).coerceIn(0f, 1f),
+            (rect.bottom / h.toFloat()).coerceIn(0f, 1f),
+            lineCount
+        ).normalized()
     }
 }
