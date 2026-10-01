@@ -43,7 +43,20 @@ class ScreenOcrCapture(
             val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
             val plane = image.planes[0]
             val bitmap = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
-            bitmap.copyPixelsFromBuffer(plane.buffer)
+            val rowStride = plane.rowStride
+            val pixelStride = plane.pixelStride
+            val rowPadding = rowStride - pixelStride * image.width
+            val paddedWidth = image.width + (rowPadding / pixelStride).coerceAtLeast(0)
+            val padded = Bitmap.createBitmap(paddedWidth, image.height, Bitmap.Config.ARGB_8888)
+            padded.copyPixelsFromBuffer(plane.buffer)
+            val cropped = if (paddedWidth == image.width) padded else Bitmap.createBitmap(
+                padded, 0, 0, image.width, image.height
+            )
+            bitmap.eraseColor(android.graphics.Color.TRANSPARENT)
+            val canvas = android.graphics.Canvas(bitmap)
+            canvas.drawBitmap(cropped, 0f, 0f, null)
+            if (cropped !== padded) cropped.recycle()
+            padded.recycle()
             image.close()
             recognizer.process(InputImage.fromBitmap(bitmap, 0))
                 .addOnSuccessListener { result ->
