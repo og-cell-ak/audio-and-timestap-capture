@@ -141,7 +141,7 @@ class CaptureService : Service() {
         val drawing=LineLayoutEditorView(c)
         drawing.lineCount=layout?.lineCount?:5
         root.addView(drawing,FrameLayout.LayoutParams(-1,-1))
-        drawing.post{drawing.setExistingLayout(layout,width,height)}
+        drawing.post{drawing.setExistingLayout(layout,resources.displayMetrics.widthPixels,resources.displayMetrics.heightPixels)}
         val panel=LinearLayout(c).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(10));setBackgroundColor(0xEE101827.toInt())}
         panel.addView(TextView(c).apply{text="CUSTOMIZE BOX • drag inside to move • drag edges/corners to resize";setTextColor(Color.WHITE);textSize=14f})
         val row=LinearLayout(c).apply{gravity=Gravity.CENTER_VERTICAL}
