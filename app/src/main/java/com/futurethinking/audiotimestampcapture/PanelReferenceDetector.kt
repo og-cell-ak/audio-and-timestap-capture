@@ -1,7 +1,13 @@
 package com.futurethinking.audiotimestampcapture
 
 data class OcrLine(val text: String, val left: Float, val top: Float)
-data class PanelReference(val number: Int, val text: String, val left: Float, val top: Float)
+data class PanelReference(
+    val number: Int,
+    val text: String,
+    val left: Float,
+    val top: Float,
+    val detectedAtMs: Long = 0L
+)
 
 object PanelReferenceDetector {
     private val numberRegex = Regex("""^\s*(\d{1,4})[\).:\-]?\s*(.*)$""")
