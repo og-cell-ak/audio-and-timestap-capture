@@ -37,9 +37,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="audio-timestamp-studio-v2.0.0-${GITHUB_SHA:0:12}"
+          TAG="audio-timestamp-studio-v3.0.0-${GITHUB_SHA:0:12}"
           gh release create "$TAG" app/build/outputs/apk/debug/app-debug.apk \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Audio Timestamp Studio v2.0.0" \
-            --notes "Separate audio capture and timestamped PDF workflow, reference-number detection, portrait capture UI, and improved screen OCR." \
+            --title "Audio Timestamp Studio v3.0.0" \
+            --notes "Editable line-box screen reading, floating capture controls, audio-to-line matching, and timestamp-only PDF output." \
             --prerelease
