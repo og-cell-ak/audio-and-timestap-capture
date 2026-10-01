@@ -23,6 +23,8 @@ class CaptureService : Service() {
         const val ACTION_PDF_READY = "pdf_ready"
         const val ACTION_STOP = "stop_capture"
         const val ACTION_FRESH = "fresh_capture"
+        const val ACTION_START = "start_capture"
+        const val ACTION_SAVE = "save_capture"
         const val EXTRA_MESSAGE = "message"
         const val EXTRA_URI = "uri"
     }
@@ -58,7 +60,7 @@ class CaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        if (intent?.action == ACTION_START) { startCaptureListening(); return START_NOT_STICKY }\n        if (intent?.action == ACTION_STOP) { stopListeningOnly(); return START_NOT_STICKY }\n        if (intent?.action == ACTION_SAVE) { savePdfOnly(); return START_NOT_STICKY }\n        when (intent?.action) {
             ACTION_STOP -> { finishCapture(); return START_NOT_STICKY }
             ACTION_FRESH -> {
                 matches.clear()
@@ -100,176 +102,122 @@ class CaptureService : Service() {
     private fun startCapture(resultCode: Int, data: Intent) {
         projection = (getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(resultCode, data)
         if (projection == null) { sendStatus("Unable to create screen capture"); stopSelf(); return }
-
         projection!!.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() { sendStatus("Screen capture permission ended"); finishCapture() }
+            override fun onStop() { sendStatus("Screen capture permission ended"); savePdfOnly() }
         }, Handler(Looper.getMainLooper()))
-
         running = true
         showBubble()
+        showGuide()
+        sendStatus("READY • set lines, then press START")
+    }
 
+    private fun startCaptureListening() {
+        if (!running) return
+        if (layout == null) { sendStatus("SET LINES and SAVE LAYOUT first"); return }
+        if (ocr != null || speech != null) return
         ocr = ScreenOcrCapture(this, projection!!, { layout }) { lines ->
             latestLines = lines
-            val visible = lines.joinToString("  •  ") { "L\${it.index}: \${it.text}" }
-            sendStatus(if (visible.isBlank()) "Reading selected lines..." else "Reading: $visible")
+            guide?.lineTexts = lines
         }
         ocr!!.start()
-
         speech = LiveSpeechTimer(this) { segment ->
-            val matchedIds = matches.map { it.panelNumber }.toSet()
-            val match = TimestampEngine.match(latestLines, segment, matchedIds)
+            val used = matches.map { it.panelNumber }.toSet()
+            val match = TimestampEngine.match(latestLines, segment, used)
             if (match != null && matches.none { it.panelNumber == match.panelNumber }) {
                 matches.add(match)
-                sendStatus("MATCHED line \${match.panelNumber} at \${format(match.timestampMs)}")
+                guide?.highlightLine = match.panelNumber
+                sendStatus("MATCHED line ${match.panelNumber} at ${format(match.timestampMs)}")
             }
         }
         speech!!.start()
-        sendStatus("RECORDING • screen reader + audio listener active")
+        guide?.running = true
+        sendStatus("STARTED • screen reading + audio listening")
+    }
+
+    private fun stopListeningOnly() {
+        ocr?.stop(); speech?.stop(); ocr = null; speech = null
+        guide?.running = false
+        guide?.highlightLine = -1
+        sendStatus("STOPPED • press START to continue or SAVE to create PDF")
+    }
+
+    private fun savePdfOnly() {
+        ocr?.stop(); speech?.stop(); ocr = null; speech = null
+        val rows = TimestampEngine.ordered(matches)
+        sendStatus("SAVING • creating timestamp PDF")
+        val uri = TimestampPdfWriter.writeToDownloads(this, rows)
+        if (uri != null) {
+            sendBroadcast(Intent(ACTION_PDF_READY).setPackage(packageName).putExtra(EXTRA_URI, uri.toString()))
+            sendStatus("SAVED • PDF is in Downloads/Audio Timestamp Studio")
+        } else {
+            sendStatus("SAVE FAILED • PDF could not be written")
+        }
+        hideEditor()
+        bubble?.let { runCatching { wm.removeView(it) } }; bubble = null
+        guide?.let { runCatching { wm.removeView(it) } }; guide = null
+        projection?.stop(); projection = null; running = false
+        stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
     }
 
     private fun showBubble() {
         if (!Settings.canDrawOverlays(this) || bubble != null) return
         val c = overlayContext ?: this
-        val box = LinearLayout(c).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(8), dp(5), dp(8), dp(5))
-            setBackgroundColor(0xDD121A2B.toInt())
+        val box = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(6),dp(5),dp(6),dp(5)); setBackgroundColor(0xEE121A2B.toInt()) }
+        fun b(t:String,col:Int,action:()->Unit)=TextView(c).apply {
+            text=t; textSize=12f; setTextColor(if(t=="SET LINES") Color.BLACK else Color.WHITE); gravity=Gravity.CENTER
+            setPadding(dp(9),dp(9),dp(9),dp(9)); background=rounded(col,16f); setOnClickListener{action()}
         }
+        box.addView(b("START",0xFF20B26B.toInt()){startCaptureListening()}); box.addView(space(4))
+        box.addView(b("STOP",0xFFE53935.toInt()){stopListeningOnly()}); box.addView(space(4))
+        box.addView(b("SAVE",0xFF3F51B5.toInt()){savePdfOnly()}); box.addView(space(4))
+        box.addView(b("SET LINES",0xFFFFC107.toInt()){showEditor()})
+        val p=WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
+        p.gravity=Gravity.TOP or Gravity.END; p.x=dp(8); p.y=dp(70)
+        wm.addView(box,p); bubble=box
+    }
 
-        val linesButton = TextView(c).apply {
-            text = "● SET LINES"
-            textSize = 13f
-            setTextColor(Color.BLACK)
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(9), dp(12), dp(9))
-            background = rounded(0xFFFFC107.toInt(), 18f)
-            setOnClickListener { showEditor() }
-        }
-        val stopButton = TextView(c).apply {
-            text = "STOP"
-            textSize = 13f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(9), dp(12), dp(9))
-            background = rounded(0xFFE53935.toInt(), 18f)
-            setOnClickListener { finishCapture() }
-        }
-        box.addView(linesButton)
-        box.addView(space(6))
-        box.addView(stopButton)
-
-        val p = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        )
-        p.gravity = Gravity.TOP or Gravity.END
-        p.x = dp(8)
-        p.y = dp(70)
-        wm.addView(box, p)
-        bubble = box
+    private fun showGuide() {
+        if (guide != null) return
+        guide = LineGuideView(overlayContext ?: this)
+        guide?.layout = layout
+        val p=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
+        wm.addView(guide,p)
     }
 
     private fun showEditor() {
         if (editor != null) return
-        val c = overlayContext ?: this
-        val root = FrameLayout(c)
-        root.setBackgroundColor(0x55000000)
-        val drawing = LineLayoutEditorView(c)
-        drawing.lineCount = layout?.lineCount ?: 5
-        root.addView(drawing, FrameLayout.LayoutParams(-1, -1))
+        val c=overlayContext?:this
+        val root=FrameLayout(c)
+        val drawing=LineLayoutEditorView(c)
+        drawing.lineCount=layout?.lineCount?:5
+        root.addView(drawing,FrameLayout.LayoutParams(-1,-1))
+        drawing.post { drawing.setExistingLayout(layout, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels) }
 
-        val panel = LinearLayout(c).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            setBackgroundColor(0xEE101827.toInt())
-        }
-        panel.addView(TextView(c).apply {
-            text = "DRAW YOUR BOX • equal sentence lines"
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-        })
-
-        val controls = LinearLayout(c).apply { gravity = Gravity.CENTER_VERTICAL }
-        val count = TextView(c).apply {
-            text = "LINES: " + drawing.lineCount
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(dp(18), 0, dp(18), 0)
-        }
-        val minus = action(c, "−") {
-            drawing.lineCount--
-            count.text = "LINES: " + drawing.lineCount
-        }
-        val plus = action(c, "+") {
-            drawing.lineCount++
-            count.text = "LINES: " + drawing.lineCount
-        }
-        controls.addView(minus)
-        controls.addView(count)
-        controls.addView(plus)
-        panel.addView(controls)
-
-        val buttons = LinearLayout(c)
-        val save = action(c, "SAVE LAYOUT") {
-            val m = drawing.toLayout(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
-            if (m == null) Toast.makeText(this, "Draw a box first", Toast.LENGTH_SHORT).show()
-            else {
-                layout = m
-                sendStatus("Layout saved • \${m.lineCount} equal lines")
-                hideEditor()
-            }
-        }
-        val cancel = action(c, "CANCEL") { hideEditor() }
-        buttons.addView(save, LinearLayout.LayoutParams(0, dp(48), 1f))
-        buttons.addView(cancel, LinearLayout.LayoutParams(0, dp(48), 1f))
+        val panel=LinearLayout(c).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(12),dp(10),dp(12),dp(10)); setBackgroundColor(0xEE101827.toInt()) }
+        panel.addView(TextView(c).apply { text="CUSTOMIZE YELLOW BOX • drag, move or resize"; textSize=14f; setTextColor(Color.WHITE) })
+        val row=LinearLayout(c).apply { gravity=Gravity.CENTER_VERTICAL }
+        val count=TextView(c).apply { text="LINES: "+drawing.lineCount; textSize=16f; setTextColor(Color.WHITE); gravity=Gravity.CENTER; setPadding(dp(16),0,dp(16),0) }
+        row.addView(action(c,"−"){drawing.lineCount--;count.text="LINES: "+drawing.lineCount})
+        row.addView(count)
+        row.addView(action(c,"+"){drawing.lineCount++;count.text="LINES: "+drawing.lineCount})
+        panel.addView(row)
+        val buttons=LinearLayout(c).apply { orientation=LinearLayout.HORIZONTAL }
+        buttons.addView(action(c,"SET / SAVE"){ 
+            val m=drawing.toLayout(resources.displayMetrics.widthPixels,resources.displayMetrics.heightPixels)
+            if(m==null) Toast.makeText(this,"Draw a larger box first",Toast.LENGTH_SHORT).show()
+            else { layout=m; guide?.layout=m; sendStatus("LAYOUT SET • yellow lines locked on screen"); hideEditor() }
+        },LinearLayout.LayoutParams(0,dp(50),1f))
+        buttons.addView(action(c,"CLOSE"){ hideEditor() },LinearLayout.LayoutParams(0,dp(50),1f))
         panel.addView(buttons)
-        val top = FrameLayout.LayoutParams(-1, dp(155))
-        top.gravity = Gravity.TOP
-        root.addView(panel, top)
-
-        val lp = WindowManager.LayoutParams(
-            -1, -1, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        )
-        wm.addView(root, lp)
-        editor = root
+        val top=FrameLayout.LayoutParams(-1,dp(165)); top.gravity=Gravity.TOP; root.addView(panel,top)
+        val lp=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
+        wm.addView(root,lp); editor=root
     }
 
     private fun hideEditor() {
         editor?.let { runCatching { wm.removeView(it) } }
         editor = null
-    }
-
-    private fun finishCapture() {
-        if (!running) { stopSelf(); return }
-        running = false
-        sendStatus("STOPPING • building timestamp PDF")
-        ocr?.stop()
-        speech?.stop()
-        ocr = null
-        speech = null
-        hideEditor()
-        bubble?.let { runCatching { wm.removeView(it) } }
-        bubble = null
-        projection?.stop()
-        projection = null
-
-        val rows = TimestampEngine.ordered(matches)
-        val uri = TimestampPdfWriter.writeToDownloads(this, rows)
-        if (uri != null) {
-            sendBroadcast(Intent(ACTION_PDF_READY).setPackage(packageName).putExtra(EXTRA_URI, uri.toString()))
-            sendStatus("DONE • timestamp PDF saved to Downloads/Audio Timestamp Studio")
-        } else {
-            sendStatus(if (rows.isEmpty()) "DONE • no confirmed speech-to-line matches, so no PDF was written" else "PDF save failed")
-        }
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
