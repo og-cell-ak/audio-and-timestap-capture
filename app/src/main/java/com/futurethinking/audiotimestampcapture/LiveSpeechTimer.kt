@@ -10,6 +10,7 @@ import android.speech.SpeechRecognizer
 
 class LiveSpeechTimer(
     context: Context,
+    private val onPartial: (String, Long) -> Unit,
     private val onSegment: (SpokenSegment) -> Unit
 ) {
     private val appContext = context
@@ -35,7 +36,10 @@ class LiveSpeechTimer(
                 active = false
                 startListening()
             }
-            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onPartialResults(partialResults: Bundle?) {
+                val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
+                if (text.isNotEmpty()) onPartial(text, (SystemClock.elapsedRealtime() - startTime).coerceAtLeast(0L))
+            }
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
     }
