@@ -266,6 +266,8 @@ class CaptureService : Service() {
         stopSelf()
     }
 
+    override fun onBind(intent: Intent?): IBinder? = null
+
     override fun onDestroy() {
         hideEditor()
         bubble?.let { runCatching { wm.removeView(it) } }
