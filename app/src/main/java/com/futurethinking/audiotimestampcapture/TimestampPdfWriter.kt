@@ -38,7 +38,7 @@ object TimestampPdfWriter {
                 page.canvas.drawText(current, 36f, y, paint)
                 y += 30f
             }
-            if (y > 790f) newPage()
+            if (y > 790f && row != rows.last()) newPage()
         }
 
         doc.finishPage(page)
