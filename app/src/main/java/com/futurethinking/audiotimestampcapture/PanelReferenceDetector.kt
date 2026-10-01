@@ -10,11 +10,15 @@ data class PanelReference(
 )
 
 object PanelReferenceDetector {
-    private val numberRegex = Regex("""^\s*(\d{1,4})[\).:\-]?\s*(.*)$""")
+    private val standaloneNumber = Regex("""^\s*(\d{1,4})\s*[.)\-:]?\s*$""")
+    private val prefixedNumber = Regex("""^\s*(\d{1,4})\s*[.)\-:]?\s+.*$""")
+
     fun detect(lines: List<OcrLine>): List<PanelReference> =
         lines.mapNotNull { line ->
-            val m = numberRegex.find(line.text) ?: return@mapNotNull null
-            val n = m.groupValues[1].toIntOrNull() ?: return@mapNotNull null
-            PanelReference(n, m.groupValues[2].trim(), line.left, line.top)
+            val value = line.text.trim()
+            val match = standaloneNumber.find(value) ?: prefixedNumber.find(value) ?: return@mapNotNull null
+            val number = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+            if (number !in 1..9999) return@mapNotNull null
+            PanelReference(number, "", line.left, line.top)
         }.sortedWith(compareBy<PanelReference> { it.top }.thenBy { it.left })
 }
