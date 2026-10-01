@@ -5,6 +5,9 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,3 +28,14 @@ jobs:
         with:
           name: audio-timestamp-capture-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish direct APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="audio-timestamp-studio-v2.0.0-${GITHUB_SHA:0:12}"
+          gh release create "$TAG" app/build/outputs/apk/debug/app-debug.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Audio Timestamp Studio v2.0.0" \
+            --notes "Separate audio capture and timestamped PDF workflow, reference-number detection, portrait capture UI, and improved screen OCR." \
+            --prerelease
