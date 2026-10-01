@@ -27,7 +27,7 @@ class MainActivity : Activity() {
                     status.text = intent.getStringExtra(CaptureService.EXTRA_MESSAGE) ?: "Working..."
                 }
                 CaptureService.ACTION_PDF_READY -> {
-                    lastPdf = intent.getStringExtra(CaptureService.EXTRA_URI")?.let(Uri::parse)
+                    lastPdf = intent.getStringExtra(CaptureService.EXTRA_URI)?.let(Uri::parse)
                     status.text = "PDF READY • saved in Downloads/Audio Timestamp Studio"
                 }
             }
