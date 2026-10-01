@@ -12,6 +12,7 @@ class LiveSpeechTimer(
     context: Context,
     private val onSegment: (SpokenSegment) -> Unit
 ) {
+    private val appContext = context
     private val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
     private var segmentStart = 0L
     private var active = false
@@ -45,7 +46,7 @@ class LiveSpeechTimer(
     }
 
     private fun startListening() {
-        if (active || !SpeechRecognizer.isRecognitionAvailable(context)) return
+        if (active || !SpeechRecognizer.isRecognitionAvailable(appContext)) return
         active = true
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
