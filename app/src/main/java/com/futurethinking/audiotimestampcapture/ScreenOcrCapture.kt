@@ -2,6 +2,7 @@ package com.futurethinking.audiotimestampcapture
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -26,68 +27,112 @@ class ScreenOcrCapture(
     private var lastNumber: Int? = null
     private var lastScanMs = 0L
     private var captureStartMs = 0L
+    private var processing = false
+    private var stopped = false
 
     fun start() {
+        stopped = false
+        processing = false
+        lastNumber = null
+        lastScanMs = 0L
         captureStartMs = SystemClock.elapsedRealtime()
+
         val metrics = context.resources.displayMetrics
         val width = metrics.widthPixels
         val height = metrics.heightPixels
+
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         reader!!.setOnImageAvailableListener({ r ->
-            val now = System.currentTimeMillis()
-            if (now - lastScanMs < 900L) {
+            if (stopped || processing) {
+                r.acquireLatestImage()?.close()
+                return@setOnImageAvailableListener
+            }
+
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastScanMs < 550L) {
                 r.acquireLatestImage()?.close()
                 return@setOnImageAvailableListener
             }
             lastScanMs = now
+
             val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
-            val plane = image.planes[0]
-            val bitmap = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
-            val rowStride = plane.rowStride
-            val pixelStride = plane.pixelStride
-            val rowPadding = rowStride - pixelStride * image.width
-            val paddedWidth = image.width + (rowPadding / pixelStride).coerceAtLeast(0)
-            val padded = Bitmap.createBitmap(paddedWidth, image.height, Bitmap.Config.ARGB_8888)
-            padded.copyPixelsFromBuffer(plane.buffer)
-            val cropped = if (paddedWidth == image.width) padded else Bitmap.createBitmap(
-                padded, 0, 0, image.width, image.height
-            )
-            bitmap.eraseColor(android.graphics.Color.TRANSPARENT)
-            val canvas = android.graphics.Canvas(bitmap)
-            canvas.drawBitmap(cropped, 0f, 0f, null)
-            if (cropped !== padded) cropped.recycle()
-            padded.recycle()
-            image.close()
-            recognizer.process(InputImage.fromBitmap(bitmap, 0))
-                .addOnSuccessListener { result ->
-                    val lines = result.textBlocks.flatMap { block ->
-                        block.lines.map { line ->
-                            OcrLine(
-                                line.text.trim(),
-                                line.boundingBox?.left?.toFloat() ?: 0f,
-                                line.boundingBox?.top?.toFloat() ?: 0f
+            processing = true
+
+            try {
+                val plane = image.planes[0]
+                val pixelStride = plane.pixelStride
+                val rowStride = plane.rowStride
+                val rowPadding = (rowStride - pixelStride * image.width).coerceAtLeast(0)
+                val paddedWidth = image.width + rowPadding / pixelStride
+
+                val padded = Bitmap.createBitmap(
+                    paddedWidth,
+                    image.height,
+                    Bitmap.Config.ARGB_8888
+                )
+                padded.copyPixelsFromBuffer(plane.buffer)
+
+                val bitmap = if (paddedWidth == image.width) {
+                    padded
+                } else {
+                    Bitmap.createBitmap(padded, 0, 0, image.width, image.height).also {
+                        padded.recycle()
+                    }
+                }
+
+                image.close()
+
+                recognizer.process(InputImage.fromBitmap(bitmap, 0))
+                    .addOnSuccessListener { result ->
+                        if (stopped) return@addOnSuccessListener
+
+                        val lines = result.textBlocks.flatMap { block ->
+                            block.lines.map { line ->
+                                OcrLine(
+                                    line.text.trim(),
+                                    line.boundingBox?.left?.toFloat() ?: 0f,
+                                    line.boundingBox?.top?.toFloat() ?: 0f
+                                )
+                            }
+                        }
+
+                        val expected = (lastNumber ?: 0) + 1
+                        val candidate = PanelReferenceDetector.detect(lines)
+                            .firstOrNull { it.number == expected }
+
+                        if (candidate != null) {
+                            lastNumber = candidate.number
+                            onPanel(
+                                candidate.copy(
+                                    detectedAtMs = SystemClock.elapsedRealtime() - captureStartMs
+                                )
                             )
                         }
                     }
-                    val refs = PanelReferenceDetector.detect(lines)
-                    val expected = (lastNumber ?: 0) + 1
-                    val candidate = refs.firstOrNull { it.number == expected }
-                    if (candidate != null) {
-                        lastNumber = candidate.number
-                        onPanel(candidate.copy(detectedAtMs = SystemClock.elapsedRealtime() - captureStartMs))
+                    .addOnCompleteListener {
+                        processing = false
+                        bitmap.recycle()
                     }
-                }
-                .addOnCompleteListener { bitmap.recycle() }
+            } catch (_: Throwable) {
+                image.close()
+                processing = false
+            }
         }, handler)
 
         display = projection.createVirtualDisplay(
-            "AudioTimestampScreen", width, height, metrics.densityDpi,
+            "AudioTimestampScreen",
+            width,
+            height,
+            metrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            reader!!.surface, null, handler
+            reader!!.surface,
+            null,
+            handler
         )
     }
 
     fun stop() {
+        stopped = true
         display?.release()
         reader?.close()
         recognizer.close()
