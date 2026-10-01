@@ -29,6 +29,11 @@ jobs:
 
       - name: Verify unit tests and build APK
         run: gradle testDebugUnitTest assembleDebug
+      - name: QA verification pass 2
+        run: gradle testDebugUnitTest assembleDebug
+      - name: QA verification pass 3
+        run: gradle testDebugUnitTest assembleDebug
+
       - name: Verify APK archive
         run: unzip -t app/build/outputs/apk/debug/app-debug.apk
       - name: Verify APK package
