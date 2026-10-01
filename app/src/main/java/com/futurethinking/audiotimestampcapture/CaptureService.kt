@@ -194,24 +194,69 @@ class CaptureService : Service() {
         root.addView(drawing,FrameLayout.LayoutParams(-1,-1))
         drawing.post { drawing.setExistingLayout(layout, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels) }
 
-        val panel=LinearLayout(c).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(12),dp(10),dp(12),dp(10)); setBackgroundColor(0xEE101827.toInt()) }
-        panel.addView(TextView(c).apply { text="CUSTOMIZE YELLOW BOX • drag, move or resize"; textSize=14f; setTextColor(Color.WHITE) })
-        val row=LinearLayout(c).apply { gravity=Gravity.CENTER_VERTICAL }
-        val count=TextView(c).apply { text="LINES: "+drawing.lineCount; textSize=16f; setTextColor(Color.WHITE); gravity=Gravity.CENTER; setPadding(dp(16),0,dp(16),0) }
-        row.addView(action(c,"−"){drawing.lineCount--;count.text="LINES: "+drawing.lineCount})
-        row.addView(count)
-        row.addView(action(c,"+"){drawing.lineCount++;count.text="LINES: "+drawing.lineCount})
+        val panel=LinearLayout(c).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setBackgroundColor(0xF5101827.toInt())
+        }
+        panel.addView(TextView(c).apply {
+            text="CUSTOMIZE YELLOW BOX"
+            textSize=18f
+            typeface=Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setPadding(0,0,0,dp(4))
+        })
+        panel.addView(TextView(c).apply {
+            text="Drag inside to MOVE • drag edges/corners to RESIZE"
+            textSize=13f
+            setTextColor(0xFFE1E7F4.toInt())
+            setPadding(0,0,0,dp(8))
+        })
+        val row=LinearLayout(c).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+        }
+        val count=TextView(c).apply {
+            text="LINES: "+drawing.lineCount
+            textSize=16f
+            typeface=Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity=Gravity.CENTER
+        }
+        row.addView(action(c,"−"){ drawing.lineCount--; count.text="LINES: "+drawing.lineCount },
+            LinearLayout.LayoutParams(0,dp(52),1f))
+        row.addView(count,LinearLayout.LayoutParams(dp(120),dp(52)))
+        row.addView(action(c,"+"){ drawing.lineCount++; count.text="LINES: "+drawing.lineCount },
+            LinearLayout.LayoutParams(0,dp(52),1f))
         panel.addView(row)
-        val buttons=LinearLayout(c).apply { orientation=LinearLayout.HORIZONTAL }
-        buttons.addView(action(c,"SET / SAVE"){ 
+
+        val buttons=LinearLayout(c).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER
+            setPadding(0,dp(8),0,0)
+        }
+        buttons.addView(action(c,"SET LAYOUT / SAVE") {
             val m=drawing.toLayout(resources.displayMetrics.widthPixels,resources.displayMetrics.heightPixels)
-            if(m==null) Toast.makeText(this,"Draw a larger box first",Toast.LENGTH_SHORT).show()
-            else { layout=m; guide?.layout=m; sendStatus("LAYOUT SET • yellow lines locked on screen"); hideEditor() }
-        },LinearLayout.LayoutParams(0,dp(50),1f))
-        buttons.addView(action(c,"CLOSE"){ hideEditor() },LinearLayout.LayoutParams(0,dp(50),1f))
+            if(m==null) {
+                Toast.makeText(this,"Draw a larger box first",Toast.LENGTH_SHORT).show()
+            } else {
+                layout=m
+                guide?.layout=m
+                hideEditor()
+                sendStatus("LAYOUT SAVED • yellow lines locked on screen")
+            }
+        },LinearLayout.LayoutParams(0,dp(56),1f))
+        buttons.addView(action(c,"CLOSE EDITOR") {
+            hideEditor()
+            sendStatus("EDITOR CLOSED • layout unchanged")
+        },LinearLayout.LayoutParams(0,dp(56),1f))
         panel.addView(buttons)
-        val top=FrameLayout.LayoutParams(-1,dp(165)); top.gravity=Gravity.TOP; root.addView(panel,top)
-        val lp=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
+        val top=FrameLayout.LayoutParams(-1,FrameLayout.LayoutParams.WRAP_CONTENT)
+        top.gravity=Gravity.TOP
+        root.addView(panel,top)
+        val lp=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT)
         wm.addView(root,lp); editor=root
     }
 
