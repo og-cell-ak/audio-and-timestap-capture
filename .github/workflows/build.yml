@@ -27,7 +27,11 @@ jobs:
           cp upgrade_payload/TimestampEngine.kt app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampEngine.kt
           cp upgrade_payload/TimestampPdfWriter.kt app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt
 
-      - name: Verify unit tests and build APK
+      - name: IT verification pass 1
+        run: gradle testDebugUnitTest assembleDebug
+      - name: IT verification pass 2
+        run: gradle testDebugUnitTest assembleDebug
+      - name: IT verification pass 3
         run: gradle testDebugUnitTest assembleDebug
       - name: QA verification pass 2
         run: gradle testDebugUnitTest assembleDebug
