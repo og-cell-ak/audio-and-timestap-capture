@@ -14,6 +14,9 @@ class LineLayoutEditorView(context: Context) : View(context) {
     private var sx = 0f
     private var sy = 0f
     private var drawing = false
+    private var lastX = 0f
+    private var lastY = 0f
+    private var mode = 0
     var rect = RectF()
         private set
     var lineCount = 5
@@ -35,21 +38,42 @@ class LineLayoutEditorView(context: Context) : View(context) {
         }
     }
 
+    fun setExistingLayout(layout: LineLayout?, width: Int, height: Int) {
+        if (layout == null || width <= 0 || height <= 0) return
+        rect.set(layout.left * width, layout.top * height, layout.right * width, layout.bottom * height)
+        invalidate()
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                sx = event.x; sy = event.y; drawing = true
-                rect.set(sx, sy, sx, sy); invalidate(); return true
+                sx = event.x; sy = event.y; lastX = sx; lastY = sy; drawing = true
+                mode = if (rect.width() > 40f && rect.height() > 40f) hitMode(sx, sy) else 0
+                if (mode == 0) { rect.set(sx, sy, sx, sy); mode = 1 }
+                invalidate(); return true
             }
             MotionEvent.ACTION_MOVE -> {
                 if (drawing) {
-                    rect.set(min(sx,event.x), min(sy,event.y), max(sx,event.x), max(sy,event.y))
-                    invalidate()
+                    val x=event.x; val y=event.y
+                    when(mode) {
+                        1 -> rect.set(min(sx,x),min(sy,y),max(sx,x),max(sy,y))
+                        2 -> { rect.offset(x-lastX,y-lastY); rect.offset(if(rect.left<0) -rect.left else if(rect.right>width) width-rect.right else 0f, if(rect.top<0) -rect.top else if(rect.bottom>height) height-rect.bottom else 0f) }
+                        3 -> rect.left=min(x,rect.right-40f).coerceAtLeast(0f)
+                        4 -> rect.right=max(x,rect.left+40f).coerceAtMost(width.toFloat())
+                        5 -> rect.top=min(y,rect.bottom-40f).coerceAtLeast(0f)
+                        6 -> rect.bottom=max(y,rect.top+40f).coerceAtMost(height.toFloat())
+                        7 -> { rect.left=min(x,rect.right-40f).coerceAtLeast(0f); rect.top=min(y,rect.bottom-40f).coerceAtLeast(0f) }
+                        8 -> { rect.right=max(x,rect.left+40f).coerceAtMost(width.toFloat()); rect.top=min(y,rect.bottom-40f).coerceAtLeast(0f) }
+                        9 -> { rect.left=min(x,rect.right-40f).coerceAtLeast(0f); rect.bottom=max(y,rect.top+40f).coerceAtMost(height.toFloat()) }
+                        10 -> { rect.right=max(x,rect.left+40f).coerceAtMost(width.toFloat()); rect.bottom=max(y,rect.top+40f).coerceAtMost(height.toFloat()) }
+                    }
+                    lastX=x; lastY=y; invalidate()
                 }
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 drawing = false
+                mode = 0
                 if (rect.width() < 40f || rect.height() < 40f) rect.setEmpty()
                 invalidate(); return true
             }
@@ -57,7 +81,12 @@ class LineLayoutEditorView(context: Context) : View(context) {
         return true
     }
 
-    fun toLayout(w: Int, h: Int): LineLayout? {
+    private fun hitMode(x: Float, y: Float): Int {
+        val d=45f; val l=x<=rect.left+d; val r=x>=rect.right-d; val t=y<=rect.top+d; val b=y>=rect.bottom-d
+        return when { l&&t->7; r&&t->8; l&&b->9; r&&b->10; l->3; r->4; t->5; b->6; rect.contains(x,y)->2; else->0 }
+    }
+
+    fun toLayout(w: Int, h: Int): LineLayout?
         if (rect.width() < 40f || rect.height() < 40f) return null
         return LineLayout(rect.left/w, rect.top/h, rect.right/w, rect.bottom/h, lineCount).normalized()
     }
