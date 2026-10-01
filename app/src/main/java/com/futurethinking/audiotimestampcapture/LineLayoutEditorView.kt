@@ -86,7 +86,7 @@ class LineLayoutEditorView(context: Context) : View(context) {
         return when { l&&t->7; r&&t->8; l&&b->9; r&&b->10; l->3; r->4; t->5; b->6; rect.contains(x,y)->2; else->0 }
     }
 
-    fun toLayout(w: Int, h: Int): LineLayout?
+    fun toLayout(w: Int, h: Int): LineLayout? {
         if (rect.width() < 40f || rect.height() < 40f) return null
         return LineLayout(rect.left/w, rect.top/h, rect.right/w, rect.bottom/h, lineCount).normalized()
     }
