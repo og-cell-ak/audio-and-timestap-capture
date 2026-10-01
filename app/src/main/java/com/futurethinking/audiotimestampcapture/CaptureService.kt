@@ -123,12 +123,7 @@ class CaptureService : Service() {
         }
         ocr!!.start()
 
-        val systemLocale = Locale.getDefault()
-        val speechLocale = if (systemLocale.language.equals("hi", true)) {
-            Locale.forLanguageTag("hi-IN")
-        } else {
-            Locale.forLanguageTag("en-IN")
-        }
+        val speechLocale = Locale.forLanguageTag("hi-IN")
 
         speech = LiveSpeechTimer(
             context = this,
@@ -216,7 +211,7 @@ class CaptureService : Service() {
         val drawing=LineLayoutEditorView(c)
         drawing.lineCount=layout?.lineCount?:5
         root.addView(drawing,FrameLayout.LayoutParams(-1,-1))
-        drawing.post { drawing.setExistingLayout(layout, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels) }
+        drawing.post { drawing.setExistingLayout(layout, drawing.width, drawing.height) }
 
         val panel=LinearLayout(c).apply {
             orientation=LinearLayout.VERTICAL
@@ -260,7 +255,7 @@ class CaptureService : Service() {
             setPadding(0,dp(8),0,0)
         }
         buttons.addView(action(c,"SET LAYOUT / SAVE") {
-            val m=drawing.toLayout(resources.displayMetrics.widthPixels,resources.displayMetrics.heightPixels)
+            val m=drawing.toLayout(drawing.width,drawing.height)
             if(m==null) {
                 Toast.makeText(this,"Draw a larger box first",Toast.LENGTH_SHORT).show()
             } else {
