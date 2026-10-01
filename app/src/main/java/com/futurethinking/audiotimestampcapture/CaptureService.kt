@@ -194,15 +194,21 @@ class CaptureService : Service() {
         })
 
         val controls = LinearLayout(c).apply { gravity = Gravity.CENTER_VERTICAL }
-        val minus = action(c, "−") { drawing.lineCount--; count.text = "LINES: \${drawing.lineCount}" }
         val count = TextView(c).apply {
-            text = "LINES: \${drawing.lineCount}"
+            text = "LINES: " + drawing.lineCount
             textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             setPadding(dp(18), 0, dp(18), 0)
         }
-        val plus = action(c, "+") { drawing.lineCount++; count.text = "LINES: \${drawing.lineCount}" }
+        val minus = action(c, "−") {
+            drawing.lineCount--
+            count.text = "LINES: " + drawing.lineCount
+        }
+        val plus = action(c, "+") {
+            drawing.lineCount++
+            count.text = "LINES: " + drawing.lineCount
+        }
         controls.addView(minus)
         controls.addView(count)
         controls.addView(plus)
