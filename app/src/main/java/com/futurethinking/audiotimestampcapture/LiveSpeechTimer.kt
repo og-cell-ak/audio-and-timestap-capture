@@ -22,7 +22,8 @@ import com.google.mlkit.genai.common.audio.AudioSource
 import com.google.mlkit.genai.speechrecognition.SpeechRecognition
 import com.google.mlkit.genai.speechrecognition.SpeechRecognizer as GenAiSpeechRecognizer
 import com.google.mlkit.genai.speechrecognition.SpeechRecognizerOptions
-import com.google.mlkit.genai.speechrecognition.SpeechRecognizerRequest
+import com.google.mlkit.genai.speechrecognition.speechRecognizerOptions
+import com.google.mlkit.genai.speechrecognition.speechRecognizerRequest
 import com.google.mlkit.genai.speechrecognition.SpeechRecognizerResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,10 +73,10 @@ class LiveSpeechTimer(
         scope.launch {
             try {
                 onMainStatus("STARTING • internal audio live reader")
-                val options = SpeechRecognizerOptions.Builder()
-                    .setLocale(locale)
-                    .setPreferredMode(SpeechRecognizerOptions.Mode.MODE_BASIC)
-                    .build()
+                val options = speechRecognizerOptions {
+                    this.locale = locale
+                    preferredMode = SpeechRecognizerOptions.Mode.MODE_BASIC
+                }
                 val recognizer = SpeechRecognition.getClient(options)
                 genAi = recognizer
 
@@ -114,9 +115,9 @@ class LiveSpeechTimer(
 
                 createPlaybackPipe()
                 val read = pipeRead ?: throw IllegalStateException("Audio pipe was not created")
-                val request = SpeechRecognizerRequest.Builder()
-                    .setAudioSource(AudioSource.fromPfd(read))
-                    .build()
+                val request = speechRecognizerRequest {
+                    audioSource = AudioSource.fromPfd(read)
+                }
 
                 startPlaybackAudioPump()
                 onMainStatus("LIVE • reading internal playback audio")
@@ -276,9 +277,14 @@ class LiveSpeechTimer(
         runCatching { platformRecognizer?.stopListening() }
         runCatching { platformRecognizer?.destroy() }
         platformRecognizer = null
-        runCatching { genAi?.stopRecognition() }
-        runCatching { genAi?.close() }
+        val g = genAi
         genAi = null
+        if (g != null) {
+            scope.launch {
+                runCatching { g.stopRecognition() }
+                runCatching { g.close() }
+            }
+        }
         runCatching { audioRecord?.stop() }
         runCatching { audioRecord?.release() }
         audioRecord = null
