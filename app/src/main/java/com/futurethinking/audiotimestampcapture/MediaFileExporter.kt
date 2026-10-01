@@ -2,54 +2,54 @@ package com.futurethinking.audiotimestampcapture
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import java.io.File
 import java.io.FileInputStream
 
 data class PublishedFiles(
-    val audio: File?,
-    val pdf: File?
+    val audioUri: Uri?,
+    val pdfUri: Uri?,
+    val audioLocation: String?,
+    val pdfLocation: String?
 )
 
 object MediaFileExporter {
     fun publish(context: Context, audio: File?, pdf: File?): PublishedFiles {
-        val publishedAudio = audio?.let {
+        val a = audio?.let {
             publishFile(
-                context = context,
-                source = it,
-                collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
-                relativePath = "Music/Audio Timestamp Studio",
-                mime = "audio/wav",
-                displayName = it.name
+                context, it,
+                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                "Music/Audio Timestamp Studio",
+                "audio/wav",
+                it.name
             )
         }
-
-        val publishedPdf = pdf?.let {
+        val p = pdf?.let {
             publishFile(
-                context = context,
-                source = it,
-                collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
-                relativePath = "Download/Audio Timestamp Studio",
-                mime = "application/pdf",
-                displayName = it.name
+                context, it,
+                MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                "Download/Audio Timestamp Studio",
+                "application/pdf",
+                it.name
             )
         }
-
-        return PublishedFiles(publishedAudio, publishedPdf)
+        return PublishedFiles(a?.first, p?.first, a?.second, p?.second)
     }
 
     private fun publishFile(
         context: Context,
         source: File,
-        collection: android.net.Uri,
+        collection: Uri,
         relativePath: String,
         mime: String,
         displayName: String
-    ): File? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return source
+    ): Pair<Uri, String>? {
         if (!source.exists() || source.length() == 0L) return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
 
+        val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
@@ -57,19 +57,19 @@ object MediaFileExporter {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
 
-        val resolver = context.contentResolver
         val uri = resolver.insert(collection, values) ?: return null
 
         return try {
             FileInputStream(source).use { input ->
                 resolver.openOutputStream(uri)?.use { output ->
                     input.copyTo(output, 64 * 1024)
-                } ?: error("Unable to open output")
+                } ?: error("Could not open MediaStore output")
             }
-            values.clear()
-            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-            File(relativePath, displayName)
+            val ready = ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }
+            resolver.update(uri, ready, null, null)
+            Pair(uri, "$relativePath/$displayName")
         } catch (t: Throwable) {
             resolver.delete(uri, null, null)
             null
