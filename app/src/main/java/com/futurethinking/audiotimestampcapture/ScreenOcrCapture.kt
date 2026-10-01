@@ -13,7 +13,6 @@ import android.os.SystemClock
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 class ScreenOcrCapture(
     private val context: Context,
@@ -22,7 +21,6 @@ class ScreenOcrCapture(
     private val onLines: (List<ScreenLine>) -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
-    private val latinRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     private val devanagariRecognizer = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
     private var reader: ImageReader? = null
     private var display: VirtualDisplay? = null
@@ -87,25 +85,18 @@ class ScreenOcrCapture(
             .toInt().coerceIn(top + 1, full.height)
         val crop = Bitmap.createBitmap(full, left, top, right-left, bottom-top)
         val image=InputImage.fromBitmap(crop, 0)
-        var completed=0
-        var latinText=""
-        var devanagariText=""
-        fun done(){
-            completed++
-            if(completed<2) return
-            val latin=latinText.replace(Regex("\\s+"), " ").trim()
-            val dev=devanagariText.replace(Regex("\\s+"), " ").trim()
-            val text=if(dev.length>latin.length) dev else latin
-            if(text.isNotEmpty()) output.add(ScreenLine(index + 1, text, nowMs))
-            crop.recycle()
-            processLines(full, layout, nowMs, index + 1, output)
-        }
-        latinRecognizer.process(image)
-            .addOnSuccessListener { latinText=it.text }
-            .addOnCompleteListener { done() }
         devanagariRecognizer.process(image)
-            .addOnSuccessListener { devanagariText=it.text }
-            .addOnCompleteListener { done() }
+            .addOnSuccessListener { result ->
+                val text = result.text
+                    .replace(Regex("[^\\u0900-\\u097F\\u0964\\u0965\\s]"), " ")
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                if (text.isNotEmpty()) output.add(ScreenLine(index + 1, text, nowMs))
+            }
+            .addOnCompleteListener {
+                crop.recycle()
+                processLines(full, layout, nowMs, index + 1, output)
+            }
     }
 
     fun stop() {
@@ -115,7 +106,6 @@ class ScreenOcrCapture(
         display = null
         reader = null
         busy = false
-        latinRecognizer.close()
         devanagariRecognizer.close()
     }
 }
