@@ -17,7 +17,7 @@ object TimestampEngine {
                 .trim()
             if (clean.isEmpty()) return@mapIndexedNotNull null
             TimedScript(
-                timestampMs = inPanel.first().startMs,
+                timestampMs = panel.detectedAtMs,
                 panelNumber = panel.number,
                 script = clean,
                 confidence = inPanel.map { it.confidence }.average().toFloat()
