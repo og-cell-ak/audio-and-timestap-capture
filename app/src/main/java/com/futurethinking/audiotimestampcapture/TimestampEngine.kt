@@ -10,7 +10,7 @@ object TimestampEngine {
         alreadyMatched: Set<Int>
     ): TimedScript? {
         val speech = normalize(spoken.text)
-        if (speech.isBlank()) return null
+        if (speech.isEmpty()) return null
 
         var best: ScreenLine? = null
         var bestScore = 0f
@@ -24,6 +24,7 @@ object TimestampEngine {
         }
 
         if (best == null || bestScore < 0.38f) return null
+
         return TimedScript(
             timestampMs = spoken.startMs,
             panelNumber = best.index,
@@ -36,8 +37,8 @@ object TimestampEngine {
         rows.sortedBy { it.timestampMs }
 
     private fun clean(s: String): String =
-        s.replace(Regex("""^s*d{1,4}[).:-]?s*"""), "")
-            .replace(Regex("""s+"""), " ")
+        s.replace(Regex("""^\s*\d{1,4}[).:\-]?\s*"""), "")
+            .replace(Regex("""\s+"""), " ")
             .trim()
 
     private fun normalize(s: String): List<String> =
@@ -54,6 +55,6 @@ object TimestampEngine {
         val union = sa.union(sb).size.toFloat().coerceAtLeast(1f)
         val jaccard = intersection / union
         val containment = intersection / minOf(sa.size, sb.size).toFloat().coerceAtLeast(1f)
-        return (jaccard * 0.55f + containment * 0.45f)
+        return jaccard * 0.55f + containment * 0.45f
     }
 }
