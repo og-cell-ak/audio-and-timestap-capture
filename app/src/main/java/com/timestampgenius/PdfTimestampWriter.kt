@@ -136,7 +136,7 @@ class PdfTimestampWriter(private val context: Context) {
             return Result.success(uri to name)
         } catch (t: Throwable) {
             resolver.delete(uri, null, null)
-            Result.failure(t)
+            return Result.failure(t)
         } finally {
             document.close()
         }
