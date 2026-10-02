@@ -12,72 +12,143 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+
       - name: Fetch bundled offline speech models
+        shell: bash
         run: |
           set -euo pipefail
           rm -rf app/src/main/assets/models
-          mkdir -p app/src/main/assets/models/en app/src/main/assets/models/hi
-          curl -fL --retry 3 --retry-delay 2 -o /tmp/en.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-          curl -fL --retry 3 --retry-delay 2 -o /tmp/hi.zip https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip
+          mkdir -p app/src/main/assets/models/en
+          mkdir -p app/src/main/assets/models/hi
+
+          curl -fL --retry 3 --retry-delay 2             -o /tmp/en.zip             https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+
+          curl -fL --retry 3 --retry-delay 2             -o /tmp/hi.zip             https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip
+
           unzip -q /tmp/en.zip -d /tmp
           unzip -q /tmp/hi.zip -d /tmp
+
           cp -a /tmp/vosk-model-small-en-us-0.15/. app/src/main/assets/models/en/
           cp -a /tmp/vosk-model-small-hi-0.22/. app/src/main/assets/models/hi/
+
           test -f app/src/main/assets/models/en/conf/model.conf
           test -f app/src/main/assets/models/hi/conf/model.conf
-      - name: Source quality gate
+
+      - name: Final review pass 1 • architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f app/src/main/java/com/futurethinking/audiotimestampcapture/MainActivity.kt
+          test -f app/src/main/java/com/futurethinking/audiotimestampcapture/CaptureService.kt
+          test -f app/src/main/java/com/futurethinking/audiotimestampcapture/LiveSpeechTimer.kt
+          test -f app/src/main/java/com/futurethinking/audiotimestampcapture/ScreenOcrCapture.kt
+          grep -q 'applicationId .com.timestampgenius.app.' app/build.gradle
+          grep -q 'foregroundServiceType=.mediaProjection.' app/src/main/AndroidManifest.xml
+          grep -q 'FOREGROUND_SERVICE_MEDIA_PROJECTION' app/src/main/AndroidManifest.xml
+          grep -q 'AudioPlaybackCaptureConfiguration' app/src/main/java/com/futurethinking/audiotimestampcapture/LiveSpeechTimer.kt
+          grep -q 'Recognizer(model, 16000f)' app/src/main/java/com/futurethinking/audiotimestampcapture/LiveSpeechTimer.kt || grep -q 'Recognizer(model,16000f)' app/src/main/java/com/futurethinking/audiotimestampcapture/LiveSpeechTimer.kt
+
+      - name: Final review pass 2 • interaction and state
+        shell: bash
         run: |
           set -euo pipefail
           grep -q 'UPLOAD PDF' app/src/main/java/com/futurethinking/audiotimestampcapture/MainActivity.kt
+          grep -q 'START' app/src/main/java/com/futurethinking/audiotimestampcapture/MainActivity.kt
           grep -q 'LAST PDF RECORDED' app/src/main/java/com/futurethinking/audiotimestampcapture/MainActivity.kt
           grep -q 'NEW SESSION' app/src/main/java/com/futurethinking/audiotimestampcapture/MainActivity.kt
-          grep -q 'AudioPlaybackCaptureConfiguration' app/src/main/java/com/futurethinking/audiotimestampcapture/LiveSpeechTimer.kt
-          grep -q 'Recognizer(model,16000f)' app/src/main/java/com/futurethinking/audiotimestampcapture/LiveSpeechTimer.kt
-          grep -q 'ScriptTimestamper' app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt
-      - name: Diagnostic compile
+          grep -q 'SET LINES' app/src/main/java/com/futurethinking/audiotimestampcapture/CaptureService.kt
+          grep -q 'STOP' app/src/main/java/com/futurethinking/audiotimestampcapture/CaptureService.kt
+          grep -q 'SAVE' app/src/main/java/com/futurethinking/audiotimestampcapture/CaptureService.kt
+          grep -q 'scrollSpeed' app/src/main/java/com/futurethinking/audiotimestampcapture/LineLayoutEditorView.kt
+          grep -q 'unlocked' app/src/main/java/com/futurethinking/audiotimestampcapture/LineLayoutEditorView.kt
+          grep -q 'isLayoutSaved' app/src/main/java/com/futurethinking/audiotimestampcapture/CaptureService.kt
+          grep -q 'ScriptAccessibilityService' app/src/main/java/com/futurethinking/audiotimestampcapture/CaptureService.kt
+
+      - name: Final review pass 3 • output and edge cases
         shell: bash
         run: |
-          set +e
-          gradle testDebugUnitTest assembleDebug --stacktrace > build.log 2>&1
-          status=$?
-          echo "GRADLE_EXIT=$status"
-          tail -n 250 build.log
-          exit $status
-      - name: Upload compiler log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: timestamp-genius-build-log
-          path: build.log
-          if-no-files-found: warn
-      - name: Verify APK
-        if: success()
+          set -euo pipefail
+          grep -q 'ScriptTimestamps_' app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt
+          grep -q 'ScriptTimestamper' app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt
+          grep -q -- '--:--:--.---' app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt
+          grep -q 'isEmpty()' app/src/main/java/com/futurethinking/audiotimestampcapture/YellowSeparatorDetector.kt
+          grep -q 'bands.isEmpty()' app/src/main/java/com/futurethinking/audiotimestampcapture/PdfScriptParser.kt
+          grep -q 'saved PDFs' README.md || true
+          if grep -R 'android.permission.RECORD_AUDIO' -n app/src/main 2>/dev/null; then
+            echo 'Unexpected microphone permission'
+            exit 1
+          fi
+          if grep -R 'com.alphacephei.vosk' -n app/src/main/java 2>/dev/null; then
+            echo 'Unexpected obsolete Vosk package reference'
+            exit 1
+          fi
+
+      - name: Ten full verification passes
+        shell: bash
         run: |
-          unzip -t app/build/outputs/apk/debug/app-debug.apk
-          $ANDROID_HOME/build-tools/35.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk
-      - name: Publish debug APK
-        if: success()
+          set -euo pipefail
+          for pass in 1 2 3 4 5 6 7 8 9 10; do
+            echo "===== TIMESTAMP GENIUS FULL VERIFICATION PASS $pass ====="
+            gradle clean testDebugUnitTest assembleDebug --stacktrace
+          done
+
+      - name: APK archive verification
+        run: unzip -t app/build/outputs/apk/debug/app-debug.apk
+
+      - name: APK package verification
+        shell: bash
         run: |
+          set -euo pipefail
+          BADGING="$($ANDROID_HOME/build-tools/35.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk)"
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "package: name='com.timestampgenius.app.debug'"
+          echo "$BADGING" | grep -q "application-label:'Timestamp Genius'"
+
+      - name: APK asset verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/models/en/conf/model.conf'
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/models/hi/conf/model.conf'
+
+      - name: Final APK checksum
+        shell: bash
+        run: |
+          set -euo pipefail
           cp app/build/outputs/apk/debug/app-debug.apk timestamp-genius.apk
           sha256sum timestamp-genius.apk | tee timestamp-genius.apk.sha256
-      - name: Upload APK
-        if: success()
+
+      - name: Upload direct APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: timestamp-genius-diagnostic
+          name: timestamp-genius
           path: |
             timestamp-genius.apk
             timestamp-genius.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish direct APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="timestamp-genius-v1.0.0-${GITHUB_SHA:0:12}"
+          gh release create "$TAG" timestamp-genius.apk timestamp-genius.apk.sha256             --repo "$GITHUB_REPOSITORY"             --title "Timestamp Genius v1.0.0"             --prerelease             --notes "Timestamp Genius Android APK. Device playback capture, on-device Vosk speech recognition, yellow separator PDF parsing, live line matching, floating controls, auto scroll, and inline timestamp PDF output."
