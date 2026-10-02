@@ -126,18 +126,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (Settings.canDrawOverlays(this)) {
-            runCatching {
-                ContextCompat.startForegroundService(
-                    this,
-                    Intent(this, TimestampForegroundService::class.java)
-                )
-            }
-        }
-    }
-
     override fun onDestroy() {
         uiScope.cancel()
         runCatching { unregisterReceiver(receiver) }
