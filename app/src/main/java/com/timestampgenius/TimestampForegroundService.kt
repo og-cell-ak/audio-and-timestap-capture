@@ -108,7 +108,7 @@ class TimestampForegroundService : Service() {
 
         projection?.registerCallback(
             object : MediaProjection.Callback() {
-                override fun onStop() {
+                        override fun onStop() {
                     stopRecording()
                     releaseProjection()
                     broadcast("Screen capture ended.")
@@ -202,6 +202,7 @@ class TimestampForegroundService : Service() {
                     } else {
                         message
                     }
+                stopRecording()
                 broadcast(userMessage)
             }
         ).also { it.start() }
