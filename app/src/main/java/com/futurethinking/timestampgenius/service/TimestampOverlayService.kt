@@ -221,9 +221,9 @@ class TimestampOverlayService : Service() {
         val overlayPrefs = getSharedPreferences("timestamp_genius_overlay", MODE_PRIVATE)
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        val overlayWidth = (screenWidth * 0.46f)
+        val overlayWidth = (screenWidth * 0.52f)
             .roundToInt()
-            .coerceIn(dp(112), dp(220))
+            .coerceIn(dp(140), dp(250))
         val overlayHeight = dp(350)
 
         val params = WindowManager.LayoutParams(
@@ -826,9 +826,9 @@ class TimestampOverlayService : Service() {
 
         private val iconRadius: Float
             get() = min(
-                width * 0.22f,
-                dp(34f)
-            ).coerceAtLeast(dp(26f))
+                width * 0.34f,
+                dp(48f)
+            ).coerceAtLeast(dp(42f))
 
         override fun onDraw(canvas: Canvas) {
             val centerX = width / 2f
