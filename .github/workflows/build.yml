@@ -99,5 +99,4 @@ jobs:
             .
             !.gradle/**
             !app/build/**
-            !app/src/main/assets/models/**
           retention-days: 30
