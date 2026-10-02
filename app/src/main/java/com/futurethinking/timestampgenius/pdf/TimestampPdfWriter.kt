@@ -22,7 +22,6 @@ object TimestampPdfWriter {
     ): android.net.Uri {
         require(lines.isNotEmpty()) { "There is no script to save." }
 
-        // MediaStore writes directly to Downloads/ScriptTimestamper without a manual save picker.
         val document = PdfDocument()
         val pageWidth = 595
         val pageHeight = 842
@@ -140,8 +139,7 @@ object TimestampPdfWriter {
         text: String,
         width: Float
     ): List<String> {
-        val words = text
-            .trim()
+        val words = text.trim()
             .split(Regex("""\s+"""))
             .filter { it.isNotBlank() }
 
@@ -151,26 +149,17 @@ object TimestampPdfWriter {
         var current = ""
 
         for (word in words) {
-            val candidate = if (current.isBlank()) {
-                word
-            } else {
-                "$current $word"
-            }
+            val candidate = if (current.isBlank()) word else "$current $word"
 
             if (paint.measureText(candidate) <= width) {
                 current = candidate
             } else {
-                if (current.isNotBlank()) {
-                    output += current
-                }
+                if (current.isNotBlank()) output += current
                 current = word
             }
         }
 
-        if (current.isNotBlank()) {
-            output += current
-        }
-
+        if (current.isNotBlank()) output += current
         return output
     }
 }
