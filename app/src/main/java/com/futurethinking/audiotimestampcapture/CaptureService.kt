@@ -131,6 +131,7 @@ class CaptureService:Service(){
         if(l.lineCount<1){sendStatus("SET LINES must contain at least one line");return}
         stopSubcomponents()
         recording=true
+        scrollWarningSent=false
         currentLine=0
         accumulated.clear()
         startElapsed=android.os.SystemClock.elapsedRealtime()
@@ -139,7 +140,7 @@ class CaptureService:Service(){
             layout = LineLayout(l.left,l.top,l.right,maxOf(l.bottom,0.95f),l.lineCount,l.scrollSpeed,l.shapes).normalized()
         }
         val useHindi=expected.any{it.text.any{ch->ch in 'ऀ'..'ॿ'}}
-        guide?.apply{layout=l;currentLine=0;currentWordProgress=0;recording=true}
+        guide?.apply{layout=layout;currentLine=0;currentWordProgress=0;recording=true}
         startAutoScroll()
         val o=ScreenOcrCapture(this,projection!!,{layout},startElapsed,{screen->
             latestScreenLines=screen
