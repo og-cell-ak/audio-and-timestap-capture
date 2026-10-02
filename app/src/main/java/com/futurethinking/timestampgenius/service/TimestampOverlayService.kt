@@ -1,21 +1,35 @@
 package com.futurethinking.timestampgenius.service
-import android.app.*\nimport android.app.Activity
+
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
-import android.graphics.*
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
-import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.*
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
-import android.view.*
+import android.view.Gravity
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import com.futurethinking.timestampgenius.*
+import androidx.core.content.ContextCompat
+import com.futurethinking.timestampgenius.LineShape
+import com.futurethinking.timestampgenius.LayoutConfig
+import com.futurethinking.timestampgenius.SessionStore
 import com.futurethinking.timestampgenius.audio.PlaybackAudioCapture
 import com.futurethinking.timestampgenius.ocr.OcrWord
 import com.futurethinking.timestampgenius.ocr.ScriptOcr
@@ -24,45 +38,817 @@ import com.futurethinking.timestampgenius.util.FuzzyMatcher
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
-class TimestampOverlayService:Service(){
- companion object{const val ACTION_PREPARE="com.futurethinking.timestampgenius.PREPARE";const val EXTRA_PROJECTION_DATA="projection_data";private const val CHANNEL="timestamp_genius";private const val NID=91}
- private lateinit var store:SessionStore;private lateinit var wm:WindowManager;private lateinit var guide:GuideOverlay;private var touch:OverlayTouch?=null;private var editor:LineEditorView?=null;private var projection:MediaProjection?=null;private var reader:ImageReader?=null;private var display:VirtualDisplay?=null;private var audio:PlaybackAudioCapture?=null
- private var recording=false;private var start=0L;private var current=0;private var spoken="";private var partial="";private var audioLang="en";private val busy=AtomicBoolean(false);private val worker=Executors.newSingleThreadExecutor();private val main=Handler(Looper.getMainLooper());private var scrollRun:Runnable?=null
- override fun onCreate(){super.onCreate();store=SessionStore.get(this);wm=getSystemService(WINDOW_SERVICE)as WindowManager;channel();startFg();guide=GuideOverlay(this,store.layout.value);addGuide()}
- override fun onStartCommand(i:Intent?,flags:Int,id:Int):Int{if(i?.action==ACTION_PREPARE){val data=if(Build.VERSION.SDK_INT>=33)i.getParcelableExtra(EXTRA_PROJECTION_DATA,Intent::class.java)else @Suppress("DEPRECATION") i.getParcelableExtra(EXTRA_PROJECTION_DATA);if(data!=null)prepareProjection(data);showTouch()};return START_STICKY}
- override fun onDestroy(){stopRecording(false);removeEditor();removeTouch();removeGuide();runCatching{projection?.stop()};worker.shutdownNow();super.onDestroy()}
- override fun onBind(i:Intent?)=null
- private fun channel(){if(Build.VERSION.SDK_INT>=26)getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL,"Timestamp Genius capture",NotificationManager.IMPORTANCE_LOW))}
- private fun startFg(){val n=NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("Timestamp Genius").setContentText("Floating timestamp controls ready").setOngoing(true).build();if(Build.VERSION.SDK_INT>=29)startForeground(NID,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)else startForeground(NID,n)}
- private fun prepareProjection(data:Intent){runCatching{projection?.stop()};try{val m=getSystemService(MediaProjectionManager::class.java);projection=m.getMediaProjection(Activity.RESULT_OK,data);projection?.registerCallback(object:MediaProjection.Callback(){override fun onStop(){main.post{stopRecording(false);Toast.makeText(this@TimestampOverlayService,"Screen capture permission ended.",Toast.LENGTH_LONG).show()}}},main)}catch(t:Throwable){Toast.makeText(this,"Could not prepare capture: "+(t.message?:"unknown error"),Toast.LENGTH_LONG).show()}}
- private fun addGuide(){if(!Settings.canDrawOverlays(this))return;val p=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT);wm.addView(guide,p)}
- private fun removeGuide(){runCatching{wm.removeView(guide)}}
- private fun showTouch(){if(!Settings.canDrawOverlays(this))return;if(touch!=null)return;touch=OverlayTouch(this,object:OverlayTouch.Callbacks{override fun start(){startRecording()};override fun stop(){stopRecording(true)};override fun save(){savePdf()};override fun lines(){openEditor()}});val p=WindowManager.LayoutParams(dp(86),dp(330),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT);p.gravity=Gravity.TOP or Gravity.START;p.x=dp(12);p.y=dp(120);touch!!.params=p;wm.addView(touch,p)}
- private fun removeTouch(){touch?.let{runCatching{wm.removeView(it)}};touch=null}
- private fun openEditor(){if(recording){Toast.makeText(this,"STOP recording before changing the layout.",Toast.LENGTH_SHORT).show();return};if(editor!=null)return;editor=LineEditorView(this,store.layout.value,{c->store.setLayout(c);guide.update(c);Toast.makeText(this,"Layout saved. Yellow lines remain visible.",Toast.LENGTH_SHORT).show()},{removeEditor()});val p=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT);wm.addView(editor,p)}
- private fun removeEditor(){editor?.let{runCatching{wm.removeView(it)}};editor=null}
- private fun startRecording(){if(recording)return;if(!store.layoutReady){Toast.makeText(this,"Press SET LINES and SAVE LAYOUT before recording.",Toast.LENGTH_LONG).show();return};val mp=projection;if(mp==null){Toast.makeText(this,"Tap START on the main app first and grant capture permission.",Toast.LENGTH_LONG).show();return};current=0;spoken="";partial="";start=SystemClock.elapsedRealtime();store.refreshTimestampLines();recording=true;guide.recording(true);val lines=store.scriptLines.value;audioLang=language(lines);audio=PlaybackAudioCapture(this,mp,audioLang,{s,f->main.post{speech(s,f)}},{e->main.post{Toast.makeText(this,e,Toast.LENGTH_LONG).show()}});audio?.start();startCapture();startScroll();Toast.makeText(this,"Recording started at 00:00:00.000",Toast.LENGTH_SHORT).show()}
- private fun language(lines:List<String>):String{if(lines.isEmpty())return "en";val all=lines.joinToString(" ");val d=all.count{it in 'ऀ'..'ॿ'};val letters=all.count{it.isLetter()};return if(letters>0&&d.toFloat()/letters>.15f)"hi"else"en"}
- private fun startCapture(){val dm=resources.displayMetrics;reader=ImageReader.newInstance(dm.widthPixels,dm.heightPixels,PixelFormat.RGBA_8888,2);reader!!.setOnImageAvailableListener({r->if(!recording||!busy.compareAndSet(false,true))return@setOnImageAvailableListener;val im=r.acquireLatestImage()?:run{busy.set(false);return@setOnImageAvailableListener};worker.execute{try{val b=imageBitmap(im);im.close();val words=ScriptOcr.recognize(b);b.recycle();main.post{ocr(words)}}catch(_:Throwable){runCatching{im.close()}}finally{busy.set(false)}}},main);display=projection!!.createVirtualDisplay("TimestampGenius",dm.widthPixels,dm.heightPixels,dm.densityDpi,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader!!.surface,null,main)}
- private fun imageBitmap(im:Image):Bitmap{val p=im.planes[0];val buf:ByteBuffer=p.buffer;val extra=p.rowStride-p.pixelStride*im.width;val bmp=Bitmap.createBitmap(im.width+extra/p.pixelStride,im.height,Bitmap.Config.ARGB_8888);buf.rewind();bmp.copyPixelsFromBuffer(buf);return Bitmap.createBitmap(bmp,0,0,im.width,im.height).also{bmp.recycle()}}
- private fun ocr(words:List<OcrWord>){val cfg=store.layout.value;val h=resources.displayMetrics.heightPixels.toFloat();val top=cfg.boxTop*h;val bottom=(cfg.boxTop+cfg.boxHeight)*h;val gap=(bottom-top)/cfg.lineCount.coerceAtLeast(1);val rows=Array(cfg.lineCount){ArrayList<OcrWord>()};for(w in words){val y=(w.top+w.bottom)/2f;if(y in top..bottom)rows[((y-top)/gap).toInt().coerceIn(0,cfg.lineCount-1)].add(w)};val lines=rows.map{it.sortedBy(OcrWord::left).joinToString(" "){it.text}.trim()};if(store.scriptLines.value.isEmpty()&&lines.count{it.isNotBlank()}>0)store.replaceScript(lines);val all=store.scriptLines.value.joinToString(" ");if(audioLang!="hi"&&language(listOf(all))=="hi"&&recording){audio?.stop();audio=PlaybackAudioCapture(this,projection!!,"hi",{s,f->main.post{speech(s,f)}},{e->main.post{Toast.makeText(this,e,Toast.LENGTH_LONG).show()}});audioLang="hi";audio?.start()};if(store.scriptLines.value.isNotEmpty()&&current<store.scriptLines.value.size){val p=FuzzyMatcher.progress(store.scriptLines.value[current],spoken+" "+partial);val n=FuzzyMatcher.normalize(store.scriptLines.value[current]).size;guide.highlight(current,(p*n).roundToInt(),rows[current])}}
- private fun speech(text:String,isFinal:Boolean){if(!recording||text.isBlank())return;if(isFinal){spoken=(spoken+" "+text).trim().takeLast(3000);partial=""}else partial=text;val lines=store.scriptLines.value;if(current !in lines.indices)return;val score=FuzzyMatcher.progress(lines[current],spoken+" "+partial);val n=FuzzyMatcher.normalize(lines[current]).size;val threshold=if(n<=3).80f else if(n<=7).86f else .90f;if(score>=threshold)complete() else ahead(lines)}
- private fun ahead(lines:List<String>){var best=-1;var bs=.0f;val tail=spoken+" "+partial;for(i in current+1 until minOf(lines.size,current+4)){val s=FuzzyMatcher.progress(lines[i],tail);if(s>bs){bs=s;best=i}};if(best>=0&&bs>=.78f){current=best;guide.current(current)}}
- private fun complete(){val t=SystemClock.elapsedRealtime()-start;store.recordTimestamp(current,t);guide.current(current+1);current++;if(current>=store.scriptLines.value.size){stopRecording(false);Toast.makeText(this,"All script lines detected.",Toast.LENGTH_SHORT).show()}}
- private fun startScroll(){stopScroll();if(store.layout.value.scrollSpeed<=0)return;val r=object:Runnable{override fun run(){if(!recording)return;repeat((store.layout.value.scrollSpeed+2)/3){ScriptAccessibilityService.scrollForward()};main.postDelayed(this,(1000L-store.layout.value.scrollSpeed*90L).coerceAtLeast(180L))}};scrollRun=r;main.post(r)}
- private fun stopScroll(){scrollRun?.let(main::removeCallbacks);scrollRun=null}
- private fun stopRecording(toast:Boolean){val was=recording;recording=false;stopScroll();audio?.stop();audio=null;runCatching{display?.release()};display=null;runCatching{reader?.close()};reader=null;guide.recording(false);partial="";if(toast&&was)Toast.makeText(this,"Recording stopped. Timestamps are kept.",Toast.LENGTH_SHORT).show()}
- private fun savePdf(){val lines=store.timestamps.value;if(lines.isEmpty()){Toast.makeText(this,"No script lines to save yet.",Toast.LENGTH_SHORT).show();return};worker.execute{try{val u=TimestampPdfWriter.write(this,lines,store.timestampFileName());store.setLastPdf(u);main.post{Toast.makeText(this,"Saved "+(u.lastPathSegment?:"PDF")+" in Downloads/ScriptTimestamper",Toast.LENGTH_LONG).show()}}catch(t:Throwable){main.post{Toast.makeText(this,"PDF save failed: "+(t.message?:"unknown error"),Toast.LENGTH_LONG).show()}}}}
- private fun dp(v:Int)=(v*resources.displayMetrics.density).roundToInt()
+class TimestampOverlayService : Service() {
 
- private class GuideOverlay(context:Context,private var cfg:LayoutConfig):View(context){private val s=Paint(1).apply{style=Paint.Style.STROKE};private val f=Paint(1);private var current=0;private var count=0;private var words=emptyList<OcrWord>();private var rec=false
- fun update(c:LayoutConfig){cfg=c;invalidate()};fun current(i:Int){current=i.coerceAtLeast(0);count=0;words=emptyList();invalidate()};fun recording(v:Boolean){rec=v;invalidate()};fun highlight(line:Int,n:Int,w:List<OcrWord>){if(line==current){count=n;words=w;invalidate()}}
- override fun onDraw(c:Canvas){val w=width.toFloat();val h=height.toFloat();val l=cfg.boxLeft*w;val t=cfg.boxTop*h;val r=(cfg.boxLeft+cfg.boxWidth).coerceAtMost(1f)*w;val b=(cfg.boxTop+cfg.boxHeight).coerceAtMost(1f)*h;s.color=Color.YELLOW;s.strokeWidth=5f;c.drawRoundRect(l,t,r,b,14f,14f,s);val gap=(b-t)/cfg.lineCount.coerceAtLeast(1);for(i in 0 until cfg.lineCount){s.strokeWidth=if(i==current)7f else 2f;c.drawLine(l,t+gap*(i+1),r,t+gap*(i+1),s)};if(rec){f.color=0x99FFF200.toInt();words.take(count.coerceAtLeast(0)).forEach{c.drawRect(it.left.toFloat(),it.top.toFloat(),it.right.toFloat(),it.bottom.toFloat(),f)}}}}
- private class OverlayTouch(context:Context,private val cb:Callbacks):View(context){interface Callbacks{fun start();fun stop();fun save();fun lines()};var params:WindowManager.LayoutParams?=null;private val p=Paint(1);private var open=false;private var lastY=0f;private var moving=false
- override fun onDraw(c:Canvas){p.color=Color.BLACK;c.drawCircle(width/2f,42f,31f,p);p.color=Color.WHITE;p.typeface=Typeface.DEFAULT_BOLD;p.textSize=18f;c.drawText("TG",width/2f-15f,48f,p);if(open){b(c,82,"START");b(c,138,"STOP");b(c,194,"SAVE");b(c,250,"SET LINES")}}
- private fun b(c:Canvas,y:Float,s:String){p.color=Color.BLACK;c.drawRoundRect(3f,y,83f,y+48,10f,10f,p);p.color=Color.WHITE;p.textSize=12f;c.drawText(s,12f,y+30,p)}
- override fun onTouchEvent(e:android.view.MotionEvent):Boolean{when(e.actionMasked){android.view.MotionEvent.ACTION_DOWN->{lastY=e.rawY;moving=false;return true};android.view.MotionEvent.ACTION_MOVE->{if(!open&&kotlin.math.abs(e.rawY-lastY)>4){moving=true;params?.let{it.y=(it.y+(e.rawY-lastY).toInt()).coerceIn(0,(resources.displayMetrics.heightPixels-it.height).coerceAtLeast(0));lastY=e.rawY;(context.getSystemService(WINDOW_SERVICE)as WindowManager).updateViewLayout(this,it)};return true};android.view.MotionEvent.ACTION_UP->{if(moving)return true;val y=e.y;if(y<75){open=!open;invalidate()}else if(open){when{y in 82f..130f->cb.start();y in 138f..186f->cb.stop();y in 194f..242f->cb.save();y in 250f..298f->cb.lines()};open=false;invalidate()}}};return true}
-}
+    companion object {
+        const val ACTION_PREPARE = "com.futurethinking.timestampgenius.PREPARE"
+        const val EXTRA_PROJECTION_DATA = "projection_data"
+        private const val CHANNEL_ID = "timestamp_genius_capture"
+        private const val NOTIFICATION_ID = 91
+    }
+
+    private lateinit var store: SessionStore
+    private lateinit var windowManager: WindowManager
+    private lateinit var guide: GuideOverlay
+
+    private var controls: OverlayControls? = null
+    private var editor: LineEditorView? = null
+    private var projection: MediaProjection? = null
+    private var imageReader: android.media.ImageReader? = null
+    private var display: VirtualDisplay? = null
+    private var audioCapture: PlaybackAudioCapture? = null
+
+    private var recording = false
+    private var startedAt = 0L
+    private var currentLine = 0
+    private var recognizedText = ""
+    private var partialText = ""
+    private var language = "en"
+    private val ocrBusy = AtomicBoolean(false)
+    private val worker = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
+
+    private var scrollRunnable: Runnable? = null
+    private val discoveredScreenLines = ArrayList<String>()
+    private var screenMode = false
+
+    override fun onCreate() {
+        super.onCreate()
+        store = SessionStore.get(this)
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        createNotificationChannel()
+        startForegroundCaptureNotification()
+
+        guide = GuideOverlay(this, store.layout.value)
+        addGuideOverlay()
+        addControlOverlay()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_PREPARE) {
+            val projectionData =
+                if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(
+                        EXTRA_PROJECTION_DATA,
+                        Intent::class.java
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_PROJECTION_DATA)
+                }
+
+            if (projectionData != null) {
+                prepareProjection(projectionData)
+            }
+        }
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        stopRecording(false)
+        removeEditor()
+        removeControls()
+        removeGuideOverlay()
+        runCatching { projection?.stop() }
+        worker.shutdownNow()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "Timestamp Genius capture",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
+        }
+    }
+
+    private fun startForegroundCaptureNotification() {
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setContentTitle("Timestamp Genius")
+            .setContentText("Floating timestamp controls are ready")
+            .setOngoing(true)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun prepareProjection(data: Intent) {
+        runCatching { projection?.stop() }
+
+        try {
+            val manager = getSystemService(MediaProjectionManager::class.java)
+            val newProjection = manager.getMediaProjection(Activity.RESULT_OK, data)
+            projection = newProjection
+
+            newProjection?.registerCallback(
+                object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        main.post {
+                            stopRecording(false)
+                            Toast.makeText(
+                                this@TimestampOverlayService,
+                                "Screen capture permission ended.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
+                main
+            )
+        } catch (error: Throwable) {
+            Toast.makeText(
+                this,
+                "Could not prepare screen capture: " +
+                    (error.message ?: "unknown error"),
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun addGuideOverlay() {
+        if (!Settings.canDrawOverlays(this)) return
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+
+        windowManager.addView(guide, params)
+    }
+
+    private fun addControlOverlay() {
+        if (!Settings.canDrawOverlays(this) || controls != null) return
+
+        controls = OverlayControls(
+            this,
+            object : OverlayControls.Callbacks {
+                override fun onStart() = startRecording()
+                override fun onStop() = stopRecording(true)
+                override fun onSave() = savePdf()
+                override fun onSetLines() = openEditor()
+            }
+        )
+
+        val params = WindowManager.LayoutParams(
+            dp(88),
+            dp(330),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(12)
+            y = dp(120)
+        }
+
+        controls?.layoutParams = params
+        windowManager.addView(controls, params)
+    }
+
+    private fun removeGuideOverlay() {
+        runCatching { windowManager.removeView(guide) }
+    }
+
+    private fun removeControls() {
+        controls?.let { runCatching { windowManager.removeView(it) } }
+        controls = null
+    }
+
+    private fun openEditor() {
+        if (recording) {
+            Toast.makeText(
+                this,
+                "Stop recording before changing the layout.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        if (editor != null) return
+
+        editor = LineEditorView(
+            this,
+            store.layout.value,
+            onSave = { config ->
+                store.setLayout(config)
+                guide.update(config)
+                Toast.makeText(
+                    this,
+                    "Layout saved. Yellow lines remain visible.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            onClose = { removeEditor() }
+        )
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+
+        windowManager.addView(editor, params)
+    }
+
+    private fun removeEditor() {
+        editor?.let { runCatching { windowManager.removeView(it) } }
+        editor = null
+    }
+
+    private fun startRecording() {
+        if (recording) return
+
+        if (!store.layoutReady) {
+            Toast.makeText(
+                this,
+                "Open SET LINES and save the layout before recording.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val activeProjection = projection
+        if (activeProjection == null) {
+            Toast.makeText(
+                this,
+                "Tap START on the main app first and grant capture permission.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        currentLine = 0
+        recognizedText = ""
+        partialText = ""
+        discoveredScreenLines.clear()
+        screenMode = store.scriptLines.value.isEmpty()
+        startedAt = SystemClock.elapsedRealtime()
+        recording = true
+        guide.setRecording(true)
+        store.refreshTimestampLines()
+
+        language = chooseLanguage(store.scriptLines.value)
+        audioCapture = PlaybackAudioCapture(
+            this,
+            activeProjection,
+            language,
+            onText = { text, isFinal ->
+                main.post { handleSpeech(text, isFinal) }
+            },
+            onError = { message ->
+                main.post {
+                    Toast.makeText(
+                        this,
+                        message,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        )
+
+        val audioStarted = audioCapture?.start() == true
+        if (!audioStarted) {
+            stopRecording(false)
+            return
+        }
+
+        startScreenCapture()
+        startAutoScroll()
+
+        Toast.makeText(
+            this,
+            "Recording started at 00:00:00.000",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    private fun chooseLanguage(lines: List<String>): String {
+        if (lines.isEmpty()) return "en"
+        val source = lines.joinToString(" ")
+        val devanagari = source.count { it in 'ऀ'..'ॿ' }
+        val letters = source.count { it.isLetter() }
+        return if (letters > 0 && devanagari.toFloat() / letters.toFloat() > 0.15f) "hi" else "en"
+    }
+
+    private fun startScreenCapture() {
+        val metrics = resources.displayMetrics
+        val reader = android.media.ImageReader.newInstance(
+            metrics.widthPixels,
+            metrics.heightPixels,
+            PixelFormat.RGBA_8888,
+            2
+        )
+        imageReader = reader
+
+        reader.setOnImageAvailableListener({ source ->
+            if (!recording || !ocrBusy.compareAndSet(false, true)) return@setOnImageAvailableListener
+
+            val image = source.acquireLatestImage()
+            if (image == null) {
+                ocrBusy.set(false)
+                return@setOnImageAvailableListener
+            }
+
+            worker.execute {
+                try {
+                    val bitmap = imageToBitmap(image)
+                    image.close()
+                    val words = ScriptOcr.recognize(bitmap)
+                    bitmap.recycle()
+                    main.post { handleOcr(words) }
+                } catch (_: Throwable) {
+                    runCatching { image.close() }
+                } finally {
+                    ocrBusy.set(false)
+                }
+            }
+        }, main)
+
+        display = projection?.createVirtualDisplay(
+            "TimestampGenius",
+            metrics.widthPixels,
+            metrics.heightPixels,
+            metrics.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            reader.surface,
+            null,
+            main
+        )
+    }
+
+    private fun imageToBitmap(image: Image): Bitmap {
+        val plane = image.planes[0]
+        val buffer: ByteBuffer = plane.buffer
+        val width = image.width
+        val height = image.height
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        val rowPadding = rowStride - pixelStride * width
+
+        val padded = Bitmap.createBitmap(
+            width + rowPadding / pixelStride,
+            height,
+            Bitmap.Config.ARGB_8888
+        )
+
+        buffer.rewind()
+        padded.copyPixelsFromBuffer(buffer)
+
+        val cropped = Bitmap.createBitmap(
+            padded,
+            0,
+            0,
+            width,
+            height
+        )
+
+        padded.recycle()
+        return cropped
+    }
+
+    private fun handleOcr(words: List<OcrWord>) {
+        val config = store.layout.value
+        val screenHeight = resources.displayMetrics.heightPixels.toFloat()
+        val top = config.boxTop * screenHeight
+        val bottom = (config.boxTop + config.boxHeight).coerceAtMost(1f) * screenHeight
+        val gap = (bottom - top) / config.lineCount.coerceAtLeast(1)
+
+        val rows = Array(config.lineCount) { ArrayList<OcrWord>() }
+
+        for (word in words) {
+            val centerY = (word.top + word.bottom) / 2f
+            if (centerY in top..bottom) {
+                val row = ((centerY - top) / gap)
+                    .toInt()
+                    .coerceIn(0, config.lineCount - 1)
+                rows[row].add(word)
+            }
+        }
+
+        val visibleLines = rows.map { row ->
+            row.sortedBy { it.left }
+                .joinToString(" ") { it.text }
+                .trim()
+        }
+
+        if (screenMode) {
+            mergeScreenLines(visibleLines)
+        }
+
+        val expectedLines = store.scriptLines.value
+        if (expectedLines.isNotEmpty() && currentLine in expectedLines.indices) {
+            val progress = FuzzyMatcher.progress(
+                expectedLines[currentLine],
+                recognizedText + " " + partialText
+            )
+            val expectedWords = FuzzyMatcher.normalize(expectedLines[currentLine]).size
+            guide.highlight(
+                currentLine,
+                (progress * expectedWords).roundToInt(),
+                rows[currentLine]
+            )
+        }
+    }
+
+    private fun mergeScreenLines(visible: List<String>) {
+        val clean = visible.filter { it.isNotBlank() }
+
+        for (candidate in clean) {
+            val nearExisting = discoveredScreenLines.any {
+                FuzzyMatcher.similarity(it, candidate) >= 0.86f
+            }
+            if (!nearExisting) discoveredScreenLines.add(candidate)
+        }
+
+        if (discoveredScreenLines.isNotEmpty()) {
+            val current = store.scriptLines.value
+            if (discoveredScreenLines.size > current.size) {
+                store.replaceScript(discoveredScreenLines.toList())
+            }
+        }
+    }
+
+    private fun handleSpeech(text: String, isFinal: Boolean) {
+        if (!recording || text.isBlank()) return
+
+        if (isFinal) {
+            recognizedText = (recognizedText + " " + text)
+                .trim()
+                .takeLast(4000)
+            partialText = ""
+        } else {
+            partialText = text
+        }
+
+        val lines = store.scriptLines.value
+        if (currentLine !in lines.indices) return
+
+        val combined = recognizedText + " " + partialText
+        val score = FuzzyMatcher.progress(lines[currentLine], combined)
+        val wordCount = FuzzyMatcher.normalize(lines[currentLine]).size
+        val threshold = when {
+            wordCount <= 3 -> 0.78f
+            wordCount <= 7 -> 0.84f
+            else -> 0.88f
+        }
+
+        if (score >= threshold) {
+            completeCurrentLine()
+        } else {
+            resynchronize(lines, combined)
+        }
+    }
+
+    private fun resynchronize(lines: List<String>, spoken: String) {
+        var bestIndex = -1
+        var bestScore = 0f
+
+        for (index in currentLine + 1 until minOf(lines.size, currentLine + 5)) {
+            val score = FuzzyMatcher.progress(lines[index], spoken)
+            if (score > bestScore) {
+                bestScore = score
+                bestIndex = index
+            }
+        }
+
+        if (bestIndex >= 0 && bestScore >= 0.78f) {
+            for (index in currentLine until bestIndex) {
+                store.recordTimestamp(index, -1L)
+            }
+            currentLine = bestIndex
+            guide.setCurrentLine(currentLine)
+        }
+    }
+
+    private fun completeCurrentLine() {
+        val elapsed = SystemClock.elapsedRealtime() - startedAt
+        store.recordTimestamp(currentLine, elapsed)
+        currentLine += 1
+        guide.setCurrentLine(currentLine)
+        recognizedText = ""
+        partialText = ""
+
+        if (currentLine >= store.scriptLines.value.size) {
+            stopRecording(false)
+            Toast.makeText(
+                this,
+                "All script lines were detected.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun startAutoScroll() {
+        stopAutoScroll()
+
+        if (store.layout.value.scrollSpeed <= 0) return
+
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!recording) return
+                val steps = ((store.layout.value.scrollSpeed + 1) / 2).coerceAtLeast(1)
+                repeat(steps) {
+                    ScriptAccessibilityService.scrollForward()
+                }
+                main.postDelayed(
+                    this,
+                    (1000L - store.layout.value.scrollSpeed * 90L)
+                        .coerceAtLeast(180L)
+                )
+            }
+        }
+
+        scrollRunnable = runnable
+        main.post(runnable)
+    }
+
+    private fun stopAutoScroll() {
+        scrollRunnable?.let(main::removeCallbacks)
+        scrollRunnable = null
+    }
+
+    private fun stopRecording(showToast: Boolean) {
+        val wasRecording = recording
+        recording = false
+        stopAutoScroll()
+
+        audioCapture?.stop()
+        audioCapture = null
+
+        runCatching { display?.release() }
+        display = null
+        runCatching { imageReader?.close() }
+        imageReader = null
+
+        guide.setRecording(false)
+
+        if (showToast && wasRecording) {
+            Toast.makeText(
+                this,
+                "Recording stopped. Timestamps are kept.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun savePdf() {
+        val lines = store.timestamps.value
+        if (lines.isEmpty()) {
+            Toast.makeText(
+                this,
+                "No script lines are available to save.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        worker.execute {
+            try {
+                val uri = TimestampPdfWriter.write(
+                    this,
+                    lines,
+                    store.timestampFileName()
+                )
+                store.setLastPdf(uri)
+                main.post {
+                    Toast.makeText(
+                        this,
+                        "Saved PDF in Downloads/ScriptTimestamper",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } catch (error: Throwable) {
+                main.post {
+                    Toast.makeText(
+                        this,
+                        "PDF save failed: " +
+                            (error.message ?: "unknown error"),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).roundToInt()
+    }
+
+    private class GuideOverlay(
+        context: Context,
+        private var config: LayoutConfig
+    ) : android.view.View(context) {
+
+        private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+        }
+        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+
+        private var currentLine = 0
+        private var highlightedWordCount = 0
+        private var highlightedWords = emptyList<OcrWord>()
+        private var recording = false
+
+        fun update(newConfig: LayoutConfig) {
+            config = newConfig
+            invalidate()
+        }
+
+        fun setCurrentLine(line: Int) {
+            currentLine = line.coerceAtLeast(0)
+            highlightedWordCount = 0
+            highlightedWords = emptyList()
+            invalidate()
+        }
+
+        fun setRecording(value: Boolean) {
+            recording = value
+            invalidate()
+        }
+
+        fun highlight(line: Int, count: Int, words: List<OcrWord>) {
+            if (line != currentLine) return
+            highlightedWordCount = count
+            highlightedWords = words
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val width = width.toFloat()
+            val height = height.toFloat()
+            val left = config.boxLeft * width
+            val top = config.boxTop * height
+            val right = (config.boxLeft + config.boxWidth).coerceAtMost(1f) * width
+            val bottom = (config.boxTop + config.boxHeight).coerceAtMost(1f) * height
+
+            linePaint.color = Color.YELLOW
+            linePaint.strokeWidth = 5f
+            canvas.drawRoundRect(left, top, right, bottom, 14f, 14f, linePaint)
+
+            val gap = (bottom - top) / config.lineCount.coerceAtLeast(1)
+            for (index in 0 until config.lineCount) {
+                linePaint.strokeWidth = if (index == currentLine) 7f else 2f
+                canvas.drawLine(
+                    left,
+                    top + gap * (index + 1),
+                    right,
+                    top + gap * (index + 1),
+                    linePaint
+                )
+            }
+
+            if (recording) {
+                glowPaint.color = 0xAAFFF200.toInt()
+                highlightedWords
+                    .take(highlightedWordCount.coerceAtLeast(0))
+                    .forEach { word ->
+                        canvas.drawRect(
+                            word.left.toFloat(),
+                            word.top.toFloat(),
+                            word.right.toFloat(),
+                            word.bottom.toFloat(),
+                            glowPaint
+                        )
+                    }
+            }
+        }
+    }
+
+    private class OverlayControls(
+        context: Context,
+        private val callbacks: Callbacks
+    ) : android.view.View(context) {
+
+        interface Callbacks {
+            fun onStart()
+            fun onStop()
+            fun onSave()
+            fun onSetLines()
+        }
+
+        var layoutParams: WindowManager.LayoutParams? = null
+
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var expanded = false
+        private var lastRawY = 0f
+        private var moved = false
+
+        override fun onDraw(canvas: Canvas) {
+            paint.color = Color.BLACK
+            canvas.drawCircle(width / 2f, 42f, 31f, paint)
+
+            paint.color = Color.WHITE
+            paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            paint.textSize = 18f
+            canvas.drawText(
+                "TG",
+                width / 2f - 15f,
+                48f,
+                paint
+            )
+
+            if (expanded) {
+                drawButton(canvas, 82f, "START")
+                drawButton(canvas, 138f, "STOP")
+                drawButton(canvas, 194f, "SAVE")
+                drawButton(canvas, 250f, "SET LINES")
+            }
+        }
+
+        private fun drawButton(canvas: Canvas, top: Float, label: String) {
+            paint.color = Color.BLACK
+            canvas.drawRoundRect(
+                3f,
+                top,
+                width - 3f,
+                top + 48f,
+                10f,
+                10f,
+                paint
+            )
+
+            paint.color = Color.WHITE
+            paint.textSize = 12f
+            canvas.drawText(label, 12f, top + 30f, paint)
+        }
+
+        override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    lastRawY = event.rawY
+                    moved = false
+                    return true
+                }
+
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (!expanded && abs(event.rawY - lastRawY) > 4f) {
+                        moved = true
+                        layoutParams?.let { params ->
+                            params.y = (
+                                params.y + (event.rawY - lastRawY).toInt()
+                            ).coerceIn(
+                                0,
+                                (resources.displayMetrics.heightPixels - height)
+                                    .coerceAtLeast(0)
+                            )
+                            val wm =
+                                context.getSystemService(WINDOW_SERVICE) as WindowManager
+                            wm.updateViewLayout(this, params)
+                            lastRawY = event.rawY
+                        }
+                    }
+                    return true
+                }
+
+                android.view.MotionEvent.ACTION_UP -> {
+                    if (moved) return true
+
+                    when {
+                        event.y < 75f -> {
+                            expanded = !expanded
+                            invalidate()
+                        }
+
+                        expanded && event.y in 82f..130f -> callbacks.onStart()
+                        expanded && event.y in 138f..186f -> callbacks.onStop()
+                        expanded && event.y in 194f..242f -> callbacks.onSave()
+                        expanded && event.y in 250f..298f -> callbacks.onSetLines()
+                    }
+                    expanded = false
+                    invalidate()
+                    return true
+                }
+            }
+
+            return true
+        }
+    }
 }
