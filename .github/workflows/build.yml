@@ -1,0 +1,103 @@
+name: Timestamp Genius Build
+
+on:
+  push:
+    branches: [ main, timestamp-genius-v1 ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11'
+
+      - name: Download offline Vosk models
+        run: |
+          set -e
+          rm -rf app/src/main/assets
+          mkdir -p app/src/main/assets/models
+          curl -L --fail --retry 4 --retry-all-errors             https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip             -o app/src/main/assets/models/model-en.zip
+          curl -L --fail --retry 4 --retry-all-errors             https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip             -o app/src/main/assets/models/model-hi.zip
+          unzip -t app/src/main/assets/models/model-en.zip
+          unzip -t app/src/main/assets/models/model-hi.zip
+
+      - name: Review pass 01
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 02
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 03
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 04
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 05
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 06
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 07
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 08
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 09
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+      - name: Review pass 10
+        run: gradle lintDebug testDebugUnitTest assembleDebug
+
+      - name: Final verification pass 11
+        run: |
+          gradle lintDebug testDebugUnitTest assembleDebug
+          unzip -t app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Final verification pass 12
+        run: |
+          gradle lintDebug testDebugUnitTest assembleDebug
+          unzip -t app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Final verification pass 13
+        run: |
+          gradle lintDebug testDebugUnitTest assembleDebug
+          unzip -t app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Name final APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/TimestampGenius.apk
+
+      - name: Verify APK package
+        run: |
+          $ANDROID_HOME/build-tools/35.0.0/aapt2 dump badging app/build/outputs/apk/debug/TimestampGenius.apk |
+            grep -E 'package: name=|launchable-activity'
+
+      - name: Verify APK size
+        run: |
+          test -s app/build/outputs/apk/debug/TimestampGenius.apk
+          stat -c '%n %s bytes' app/build/outputs/apk/debug/TimestampGenius.apk
+
+      - name: Upload final APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: timestamp-genius-apk
+          path: app/build/outputs/apk/debug/TimestampGenius.apk
+          retention-days: 30
+
+      - name: Upload project bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: timestamp-genius-project
+          path: |
+            .
+            !.gradle/**
+            !app/build/**
+            !app/src/main/assets/models/**
+          retention-days: 30
