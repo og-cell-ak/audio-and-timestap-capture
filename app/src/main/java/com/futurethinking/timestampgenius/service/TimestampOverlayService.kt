@@ -538,11 +538,10 @@ class TimestampOverlayService : Service() {
         }
 
         if (bestIndex >= 0 && bestScore >= 0.78f) {
-            for (index in currentLine until bestIndex) {
-                store.recordTimestamp(index, -1L)
-            }
             currentLine = bestIndex
             guide.setCurrentLine(currentLine)
+            recognizedText = ""
+            partialText = ""
         }
     }
 
