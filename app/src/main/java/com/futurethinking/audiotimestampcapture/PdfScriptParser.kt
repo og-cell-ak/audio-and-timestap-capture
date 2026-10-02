@@ -56,6 +56,6 @@ object PdfScriptParser {
     private suspend fun ocr(latin:TextRecognizer,hindi:TextRecognizer,bitmap:Bitmap):String {
         val a=runCatching { latin.process(InputImage.fromBitmap(bitmap,0)).await().text }.getOrDefault("")
         val b=runCatching { hindi.process(InputImage.fromBitmap(bitmap,0)).await().text }.getOrDefault("")
-        return listOf(a,b).filter{it.isNotBlank()}.joinToString(" ").replace(Regex("\s+")," ").trim()
+        return listOf(a,b).filter{it.isNotBlank()}.joinToString(" ").replace(Regex("""\s+""")," ").trim()
     }
 }
