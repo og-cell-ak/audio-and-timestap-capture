@@ -35,6 +35,7 @@ import com.futurethinking.timestampgenius.ocr.OcrWord
 import com.futurethinking.timestampgenius.ocr.ScriptOcr
 import com.futurethinking.timestampgenius.pdf.TimestampPdfWriter
 import com.futurethinking.timestampgenius.util.FuzzyMatcher
+import com.futurethinking.timestampgenius.util.ScriptTextCleaner
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -487,7 +488,7 @@ class TimestampOverlayService : Service() {
     }
 
     private fun mergeScreenLines(visible: List<String>) {
-        val clean = visible.filter { it.isNotBlank() }
+        val clean = visible.map(ScriptTextCleaner::clean).filter { it.isNotBlank() }
 
         for (candidate in clean) {
             val nearExisting = discoveredScreenLines.any {
