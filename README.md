@@ -1,45 +1,28 @@
 # Timestamp Genius
 
-Timestamp Genius is an Android app that follows a spoken script and records the moment each script line finishes.
+Timestamp Genius follows a script while the phone plays audio or video. It captures device playback audio, reads visible script text, matches speech to script lines, records the finish time for every yellow line, and writes the result directly into a PDF.
 
-## Main workflow
+The implementation follows the supplied specification:
+1. Kotlin and Jetpack Compose main UI.
+2. Floating overlay with START, STOP, SAVE and SET LINES.
+3. Default five line guide with equal spacing.
+4. Box move and resize plus per line unlock, width, height and corner controls.
+5. Scroll speed 0 through 9.
+6. Screen OCR using ML Kit.
+7. Offline Vosk speech recognition using bundled English and Hindi models.
+8. Playback capture through MediaProjection and AudioPlaybackCaptureConfiguration.
+9. Fuzzy matching and forward resynchronization with skipped lines left as not detected.
+10. A4 PDF output with timestamp in a fixed bold column beside the script text.
+11. MediaStore output in Downloads/ScriptTimestamper.
+12. Persistent layout and session state.
+13. Accessibility service support for visible text and auto scrolling.
 
-1. UPLOAD PDF selects a script PDF. The app detects yellow separators and treats each separated segment as one script line.
-2. START requests the required overlay, notification, and screen capture permissions, then opens the floating control.
-3. SET LINES must be saved before recording. The editor starts with five equally spaced lines.
-4. The floating START control begins device playback capture, screen OCR, speech recognition, and the timer together.
-5. STOP stops capture and keeps timestamps in the active session.
-6. SAVE creates the timestamped A4 PDF in Downloads/ScriptTimestamper.
-7. LAST PDF RECORDED opens the most recently saved PDF.
-8. NEW SESSION clears active session data and cached working data, but never deletes saved PDFs.
+## Runtime
 
-## Recognition
+The app does not upload audio, screenshots or script text. The speech models are bundled into the APK by the build workflow, so recognition does not require internet access after installation. Android playback capture can still be denied by the source app, in which case the app reports the condition rather than inventing timestamps.
 
-Playback audio uses Android AudioPlaybackCapture with MediaProjection. Speech recognition is on device using bundled Vosk English or Hindi models. Screen text is read with ML Kit Latin and Devanagari OCR.
+## Use
 
-## Auto scroll
+Upload a PDF with horizontal yellow separators, or leave the PDF empty for live screen OCR. Press START on the main screen and approve the required Android permissions. Open SET LINES on the floating control, configure the guide, then press SAVE. Press START on the floating control to record. STOP preserves timestamps. SAVE creates the final PDF. NEW SESSION clears the current script and timestamp state without deleting saved PDFs.
 
-Scroll Speed 0 disables scrolling. Speeds 1 through 9 increase the forward scroll interval while recording. Android accessibility service support is used when the target script view exposes a scroll action.
-
-## Permissions
-
-Overlay permission is required for the floating controls.
-MediaProjection permission is required for screen and playback capture.
-Notification permission is required on Android 13 and newer for the foreground service notification.
-Accessibility permission is only needed for automatic scrolling of an exposed scrollable script view.
-
-## Output
-
-PDF files use the format:
-
-00:00:00.000   Script line 1
-00:00:03.578   Script line 2
---:--:--.---   Script line not detected
-
-The timestamp appears once in a fixed left column. Wrapped script text stays in the right column. Pages are A4.
-
-## Reliability behavior
-
-The app rejects invalid PDFs and PDFs without yellow separators with a readable error.
-Skipped script lines are marked not detected rather than receiving invented timestamps.
-If playback capture is blocked by the source app, the service reports the capture error.
+For auto scrolling and text access, enable Timestamp Genius under Android Accessibility settings.
