@@ -111,8 +111,8 @@ class MainActivity : androidx.activity.ComponentActivity() {
                     Text(if(count>0) "Script lines: "+count else "No PDF uploaded • screen mode",color=androidx.compose.ui.graphics.Color.DarkGray)
                     Text(status,color=androidx.compose.ui.graphics.Color.Black)
                     Button(modifier=Modifier.fillMaxWidth(),onClick={pdfPicker.launch(arrayOf("application/pdf"))}){Text("UPLOAD PDF")}
-                    Button(modifier=Modifier.fillMaxWidth(),onClick={startFlow}){Text("START")}
-                    Button(modifier=Modifier.fillMaxWidth(),onClick={openLastPdf}){Text("LAST PDF RECORDED")}
+                    Button(modifier=Modifier.fillMaxWidth(),onClick={startFlow()}){Text("START")}
+                    Button(modifier=Modifier.fillMaxWidth(),onClick={openLastPdf()}){Text("LAST PDF RECORDED")}
                     Button(modifier=Modifier.fillMaxWidth(),onClick={newSessionDialog.value=true}){Text("NEW SESSION")}
                 }
             }
@@ -165,7 +165,12 @@ class MainActivity : androidx.activity.ComponentActivity() {
     override fun onStart(){
         super.onStart()
         val f=IntentFilter().apply{addAction(CaptureService.ACTION_STATUS);addAction(CaptureService.ACTION_PDF_READY)}
-        if(Build.VERSION.SDK_INT>=33) registerReceiver(receiver,f,Context.RECEIVER_NOT_EXPORTED) else @Suppress("DEPRECATION") registerReceiver(receiver,f)
+        if(Build.VERSION.SDK_INT>=33){
+            registerReceiver(receiver,f,Context.RECEIVER_NOT_EXPORTED)
+        }else{
+            @Suppress("DEPRECATION")
+            registerReceiver(receiver,f)
+        }
     }
 
     override fun onStop(){
