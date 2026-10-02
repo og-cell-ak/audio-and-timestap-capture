@@ -20,6 +20,7 @@ object SessionStore {
     private const val SPEED = "speed"
     private const val OVERLAY_Y = "overlay_y"
     private const val SHAPES = "shapes"
+    private const val LAYOUT_SAVED = "layout_saved"
 
     fun saveScript(context: Context, lines: List<StoredScriptLine>) {
         val arr = JSONArray()
@@ -49,7 +50,7 @@ object SessionStore {
             .putInt(COUNT,l.lineCount).putInt(SPEED,l.scrollSpeed)
         val a=JSONArray()
         l.shapes.forEach { s -> a.put(JSONObject().apply { put("width",s.width);put("height",s.height);put("radius",s.radius);put("unlocked",s.unlocked) }) }
-        e.putString(SHAPES,a.toString()).apply()
+        e.putString(SHAPES,a.toString()).putBoolean(LAYOUT_SAVED,true).apply()
     }
 
     fun loadLayout(context: Context): LineLayout {
@@ -63,6 +64,8 @@ object SessionStore {
         }
         return LineLayout(p.getFloat(LEFT,.08f),p.getFloat(TOP,.18f),p.getFloat(RIGHT,.92f),p.getFloat(BOTTOM,.62f),count,p.getInt(SPEED,0),shapes).normalized()
     }
+
+    fun isLayoutSaved(context: Context): Boolean = prefs(context).getBoolean(LAYOUT_SAVED, false)
 
     fun savePdfInput(context: Context, uri: Uri?) = prefs(context).edit().putString(PDF_URI,uri?.toString()).apply()
     fun loadPdfInput(context: Context): Uri? = prefs(context).getString(PDF_URI,null)?.let(Uri::parse)
