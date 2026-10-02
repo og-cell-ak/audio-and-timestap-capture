@@ -53,6 +53,8 @@ class CaptureService:Service(){
     private var speech:LiveSpeechTimer?=null
     private var layout:LineLayout?=null
     private var recording=false
+    private var saving=false
+    private var scrollWarningSent=false
     private var startElapsed=0L
     private val lines=mutableListOf<TimedScript>()
     private var currentLine=0
@@ -63,7 +65,10 @@ class CaptureService:Service(){
             if(recording){
                 val speed=layout?.scrollSpeed ?: 0
                 if(speed>0){
-                    ScriptAccessibilityService.scrollForward()
+                    if(!ScriptAccessibilityService.scrollForward() && !scrollWarningSent){
+                        scrollWarningSent=true
+                        sendStatus("AUTO SCROLL unavailable • enable Timestamp Genius accessibility service")
+                    }
                     scrollHandler.postDelayed(this,(1900L-(speed*170L)).coerceIn(350L,1900L))
                 }
             }
@@ -122,6 +127,7 @@ class CaptureService:Service(){
         if(recording)return
         val l=(layout ?: SessionStore.loadLayout(this)).normalized()
         layout=l
+        if(!SessionStore.isLayoutSaved(this)){sendStatus("SET LINES and SAVE LAYOUT before START");return}
         if(l.lineCount<1){sendStatus("SET LINES must contain at least one line");return}
         stopSubcomponents()
         recording=true
@@ -129,6 +135,9 @@ class CaptureService:Service(){
         accumulated.clear()
         startElapsed=android.os.SystemClock.elapsedRealtime()
         val expected=SessionStore.loadScript(this)
+        if(expected.size > l.lineCount){
+            layout = LineLayout(l.left,l.top,l.right,maxOf(l.bottom,0.95f),l.lineCount,l.scrollSpeed,l.shapes).normalized()
+        }
         val useHindi=expected.any{it.text.any{ch->ch in 'ऀ'..'ॿ'}}
         guide?.apply{layout=l;currentLine=0;currentWordProgress=0;recording=true}
         startAutoScroll()
@@ -219,6 +228,8 @@ class CaptureService:Service(){
     }
 
     private fun savePdf(){
+        if(saving)return
+        saving=true
         stopAutoScroll()
         stopSubcomponents()
         recording=false
@@ -231,9 +242,9 @@ class CaptureService:Service(){
                 TimedScript(row?.timestampMs,base.index,base.text,row?.confidence?:0f,row?.detected==true)
             }
         } else lines.toList().sortedBy{it.lineNumber}
-        if(rows.isEmpty()){sendStatus("SAVE FAILED • no script lines or timestamps");return}
+        if(rows.isEmpty()){saving=false;sendStatus("SAVE FAILED • no script lines or timestamps");return}
         val uri=TimestampPdfWriter.writeToDownloads(this,rows)
-        if(uri==null){sendStatus("SAVE FAILED • could not create PDF");return}
+        if(uri==null){saving=false;sendStatus("SAVE FAILED • could not create PDF");return}
         SessionStore.saveLastPdf(this,uri)
         sendBroadcast(Intent(ACTION_PDF_READY).setPackage(packageName).putExtra(EXTRA_URI,uri.toString()))
         sendStatus("PDF SAVED • Downloads/ScriptTimestamper")
