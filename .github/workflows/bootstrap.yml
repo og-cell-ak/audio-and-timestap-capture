@@ -1,0 +1,31 @@
+name: Bootstrap Timestamp Genius
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified Timestamp Genius source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat stage/part1.b64 stage/part2.b64 stage/part3.b64 stage/part4.b64 stage/part5.b64 > /tmp/timestamp-genius.b64
+          base64 -d /tmp/timestamp-genius.b64 > /tmp/timestamp-genius.tar.gz
+          rm -rf -- ./* ./.??* 2>/dev/null || true
+          git clean -fdx
+          tar -xzf /tmp/timestamp-genius.tar.gz --strip-components=1
+          git add -A
+          git config user.name "Timestamp Genius Builder"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Build Timestamp Genius project from verified source"
+          git push origin HEAD:main
