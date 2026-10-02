@@ -16,15 +16,25 @@ class PlaybackAudioCapture(
     private val onText: (String, Boolean) -> Unit,
     private val onError: (String) -> Unit
 ) {
+
     private val running = AtomicBoolean(false)
+
+    @Volatile
+    private var recorder: AudioRecord? = null
+
+    @Volatile
     private var thread: Thread? = null
+
+    @Volatile
     private var engine: VoskSpeechEngine? = null
 
+    @Synchronized
     fun start(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             onError("Device audio capture needs Android 10 or newer.")
             return false
         }
+
         if (running.get()) return true
 
         val speechEngine = VoskSpeechEngine(context)
@@ -50,10 +60,21 @@ class PlaybackAudioCapture(
             .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
             .build()
 
-        val minimum = AudioRecord.getMinBufferSize(16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val bufferSize = minimum.coerceAtLeast(4096) * 4
+        val minimum = AudioRecord.getMinBufferSize(
+            16_000,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
 
-        val recorder = try {
+        if (minimum <= 0) {
+            speechEngine.stop()
+            onError("The device rejected the audio recording format.")
+            return false
+        }
+
+        val bufferSize = (minimum * 4).coerceAtLeast(16_000)
+
+        val audioRecord = try {
             AudioRecord.Builder()
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(bufferSize)
@@ -65,41 +86,63 @@ class PlaybackAudioCapture(
             return false
         }
 
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            recorder.release()
+        if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
+            audioRecord.release()
             speechEngine.stop()
             onError("Playback audio capture could not be initialized.")
             return false
         }
 
+        recorder = audioRecord
         engine = speechEngine
         running.set(true)
 
-        thread = Thread {
-            val buffer = ByteArray(16_000)
-            try {
-                recorder.startRecording()
-                while (running.get()) {
-                    val read = recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
-                    when {
-                        read > 0 -> speechEngine.acceptPcm16(buffer, read)
-                        read < 0 -> {
-                            if (running.get()) onError("Playback audio stream stopped.")
-                            break
+        thread = Thread(
+            {
+                val buffer = ByteArray(16_000)
+
+                try {
+                    audioRecord.startRecording()
+
+                    while (running.get()) {
+                        val read = audioRecord.read(
+                            buffer,
+                            0,
+                            buffer.size,
+                            AudioRecord.READ_BLOCKING
+                        )
+
+                        when {
+                            read > 0 -> speechEngine.acceptPcm16(buffer, read)
+
+                            read < 0 -> {
+                                if (running.get()) {
+                                    onError("Playback audio stream stopped.")
+                                }
+                                break
+                            }
                         }
                     }
+                } catch (error: Throwable) {
+                    if (running.get()) {
+                        onError(
+                            "Playback audio capture failed: " +
+                                (error.message ?: "unknown error")
+                        )
+                    }
+                } finally {
+                    runCatching { audioRecord.stop() }
+                    audioRecord.release()
+
+                    if (recorder === audioRecord) recorder = null
+                    if (engine === speechEngine) engine = null
+
+                    speechEngine.stop()
+                    running.set(false)
                 }
-            } catch (t: Throwable) {
-                if (running.get()) onError("Playback audio capture failed: ${t.message ?: "unknown error"}")
-            } finally {
-                runCatching { recorder.stop() }
-                recorder.release()
-                speechEngine.stop()
-                engine = null
-                running.set(false)
-            }
-        }.apply {
-            name = "TimestampGenius-Audio"
+            },
+            "TimestampGenius-Audio"
+        ).apply {
             isDaemon = true
         }
 
@@ -107,10 +150,25 @@ class PlaybackAudioCapture(
         return true
     }
 
+    @Synchronized
     fun stop() {
         running.set(false)
-        runCatching { thread?.join(700) }
+
+        runCatching {
+            recorder?.stop()
+        }
+
+        runCatching {
+            thread?.join(1_000)
+        }
+
         thread = null
+
+        if (running.get()) {
+            runCatching { recorder?.release() }
+            recorder = null
+        }
+
         engine?.stop()
         engine = null
     }
