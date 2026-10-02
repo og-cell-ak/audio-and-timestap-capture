@@ -32,7 +32,7 @@ object PdfScriptParser {
                     val bmp=Bitmap.createBitmap(page.width*scale,page.height*scale,Bitmap.Config.ARGB_8888)
                     page.render(bmp,null,null,PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     val bands=YellowSeparatorDetector.findBands(bmp)
-                    if(bands.size<2) error("Page " + (pageIndex+1) + " has no usable yellow separators")
+                    if(bands.isEmpty()) error("Page " + (pageIndex+1) + " has no yellow separators")
                     for(rect in YellowSeparatorDetector.extractSegments(bmp,bands)) {
                         val crop=Bitmap.createBitmap(bmp,rect.left,rect.top,rect.width(),rect.height())
                         try {
