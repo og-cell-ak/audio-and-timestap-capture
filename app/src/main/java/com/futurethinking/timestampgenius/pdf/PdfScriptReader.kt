@@ -7,6 +7,7 @@ import android.net.Uri
 import com.futurethinking.timestampgenius.ocr.OcrWord
 import com.futurethinking.timestampgenius.ocr.ScriptOcr
 import com.futurethinking.timestampgenius.ocr.YellowSeparatorDetector
+import com.futurethinking.timestampgenius.util.ScriptTextCleaner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -35,7 +36,7 @@ object PdfScriptReader {
                         }
                     }
                 }
-                output.map { it.replace(Regex("\\s+"), " ").trim() }.filter { it.isNotBlank() }
+                output.map(ScriptTextCleaner::clean).filter { it.isNotBlank() }
             }
         }
     }
