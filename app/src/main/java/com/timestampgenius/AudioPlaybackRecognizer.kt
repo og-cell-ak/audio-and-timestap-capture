@@ -5,7 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
-import android.media.MediaProjection
+import android.media.projection.MediaProjection
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -35,6 +35,8 @@ class AudioPlaybackRecognizer(
     fun start() {
         if (job != null) return
         job = CoroutineScope(Dispatchers.Default).launch {
+            var streamElapsedMs = 0L
+            var segmentStartMs = 0L
             try {
                 val modelDir = prepareModel(language)
                 val loadedModel = Model(modelDir.absolutePath)
@@ -73,8 +75,6 @@ class AudioPlaybackRecognizer(
                 }
 
                 val buffer = ShortArray(4096)
-                var streamElapsedMs = 0L
-                var segmentStartMs = 0L
                 while (isActive) {
                     val read = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                     if (read <= 0) continue
@@ -149,7 +149,7 @@ class AudioPlaybackRecognizer(
         if (File(target, "conf").exists() && File(target, "am").exists()) return target
 
         target.mkdirs()
-        context.assets.open("models/\$dirName.zip").use { input ->
+        context.assets.open("models/${dirName}.zip").use { input ->
             ZipInputStream(input.buffered()).use { zip ->
                 var rootPrefix: String? = null
                 var entry = zip.nextEntry
