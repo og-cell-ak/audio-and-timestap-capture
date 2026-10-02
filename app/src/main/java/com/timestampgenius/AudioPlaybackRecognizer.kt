@@ -74,6 +74,7 @@ class AudioPlaybackRecognizer(
 
                 val buffer = ShortArray(4096)
                 var streamElapsedMs = 0L
+                var segmentStartMs = 0L
                 while (isActive) {
                     val read = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                     if (read <= 0) continue
@@ -87,8 +88,20 @@ class AudioPlaybackRecognizer(
                     val accepted = recognizer?.acceptWaveForm(bytes, bytes.size) ?: false
                     if (accepted) {
                         val json = recognizer?.result ?: "{}"
-                        val text = JSONObject(json).optString("text", "")
-                        if (text.isNotBlank()) onResult(text, streamElapsedMs)
+                        val parsed = JSONObject(json)
+                        val text = parsed.optString("text", "")
+                        val words = parsed.optJSONArray("result")
+                        val lastWordEndMs = words?.let { array ->
+                            if (array.length() == 0) null
+                            else array.optJSONObject(array.length() - 1)
+                                ?.optDouble("end", Double.NaN)
+                                ?.takeIf { it.isFinite() }
+                                ?.times(1000.0)
+                        }?.let { segmentStartMs + it }?.roundToLong()
+                        if (text.isNotBlank()) {
+                            onResult(text, lastWordEndMs ?: streamElapsedMs)
+                        }
+                        segmentStartMs = streamElapsedMs
                     } else {
                         val json = recognizer?.partialResult ?: "{}"
                         val partial = JSONObject(json).optString("partial", "")
@@ -100,8 +113,17 @@ class AudioPlaybackRecognizer(
             } finally {
                 runCatching {
                     recognizer?.finalResult?.let {
-                        val text = JSONObject(it).optString("text", "")
-                        if (text.isNotBlank()) onResult(text, null)
+                        val parsed = JSONObject(it)
+                        val text = parsed.optString("text", "")
+                        val words = parsed.optJSONArray("result")
+                        val endMs = words?.let { array ->
+                            if (array.length() == 0) null
+                            else array.optJSONObject(array.length() - 1)
+                                ?.optDouble("end", Double.NaN)
+                                ?.takeIf { value -> value.isFinite() }
+                                ?.times(1000.0)
+                        }?.let { segmentStartMs + it }?.roundToLong()
+                        if (text.isNotBlank()) onResult(text, endMs)
                     }
                 }
                 runCatching { audioRecord?.stop() }
