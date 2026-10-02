@@ -59,7 +59,7 @@ object SessionStore {
         val shapes=MutableList(count){ LineShape() }
         for(i in 0 until minOf(count,arr.length())) {
             val o=arr.optJSONObject(i) ?: continue
-            shapes[i]=LineShape(o.optFloat("width",1f),o.optFloat("height",1f),o.optFloat("radius",0f),o.optBoolean("unlocked",false))
+            shapes[i]=LineShape(o.optDouble("width",1.0).toFloat(),o.optDouble("height",1.0).toFloat(),o.optDouble("radius",0.0).toFloat(),o.optBoolean("unlocked",false))
         }
         return LineLayout(p.getFloat(LEFT,.08f),p.getFloat(TOP,.18f),p.getFloat(RIGHT,.92f),p.getFloat(BOTTOM,.62f),count,p.getInt(SPEED,0),shapes).normalized()
     }
