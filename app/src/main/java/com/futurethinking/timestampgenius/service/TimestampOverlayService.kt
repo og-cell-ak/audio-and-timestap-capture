@@ -340,7 +340,16 @@ class TimestampOverlayService : Service() {
         }
 
         startScreenCapture()
-        startAutoScroll()
+
+        if (store.layout.value.scrollSpeed > 0 && !isAccessibilityEnabled()) {
+            Toast.makeText(
+                this,
+                "Auto-scroll needs Accessibility access. Recording will continue without auto-scroll.",
+                Toast.LENGTH_LONG
+            ).show()
+        } else {
+            startAutoScroll()
+        }
 
         Toast.makeText(
             this,
@@ -568,6 +577,7 @@ class TimestampOverlayService : Service() {
         stopAutoScroll()
 
         if (store.layout.value.scrollSpeed <= 0) return
+        if (!isAccessibilityEnabled()) return
 
         val runnable = object : Runnable {
             override fun run() {
@@ -586,6 +596,14 @@ class TimestampOverlayService : Service() {
 
         scrollRunnable = runnable
         main.post(runnable)
+    }
+
+    private fun isAccessibilityEnabled(): Boolean {
+        val enabled = android.provider.Settings.Secure.getString(
+            contentResolver,
+            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        return enabled.split(':').any { it.contains(packageName, ignoreCase = true) }
     }
 
     private fun stopAutoScroll() {
