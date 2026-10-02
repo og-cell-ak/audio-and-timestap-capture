@@ -11,6 +11,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
@@ -26,8 +27,6 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
-import com.futurethinking.timestampgenius.LineShape
 import com.futurethinking.timestampgenius.LayoutConfig
 import com.futurethinking.timestampgenius.SessionStore
 import com.futurethinking.timestampgenius.audio.PlaybackAudioCapture
@@ -39,7 +38,8 @@ import com.futurethinking.timestampgenius.util.ScriptTextCleaner
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 class TimestampOverlayService : Service() {
@@ -60,7 +60,7 @@ class TimestampOverlayService : Service() {
     private var projection: MediaProjection? = null
     private var imageReader: android.media.ImageReader? = null
     private var display: VirtualDisplay? = null
-    private var audioCapture: PlaybackAudioCapture? = null
+    private var audioCapture: com.futurethinking.timestampgenius.audio.PlaybackAudioCapture? = null
 
     private var recording = false
     private var startedAt = 0L
@@ -105,6 +105,7 @@ class TimestampOverlayService : Service() {
                 prepareProjection(projectionData)
             }
         }
+
         return START_STICKY
     }
 
@@ -114,6 +115,7 @@ class TimestampOverlayService : Service() {
         removeControls()
         removeGuideOverlay()
         runCatching { projection?.stop() }
+        projection = null
         worker.shutdownNow()
         super.onDestroy()
     }
@@ -135,7 +137,7 @@ class TimestampOverlayService : Service() {
 
     private fun startForegroundCaptureNotification() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(com.futurethinking.timestampgenius.R.drawable.ic_stat_timestamp)
             .setContentTitle("Timestamp Genius")
             .setContentText("Floating timestamp controls are ready")
             .setOngoing(true)
@@ -165,6 +167,7 @@ class TimestampOverlayService : Service() {
                     override fun onStop() {
                         main.post {
                             stopRecording(false)
+                            projection = null
                             Toast.makeText(
                                 this@TimestampOverlayService,
                                 "Screen capture permission ended.",
@@ -176,6 +179,7 @@ class TimestampOverlayService : Service() {
                 main
             )
         } catch (error: Throwable) {
+            projection = null
             Toast.makeText(
                 this,
                 "Could not prepare screen capture: " +
@@ -215,9 +219,16 @@ class TimestampOverlayService : Service() {
         )
 
         val overlayPrefs = getSharedPreferences("timestamp_genius_overlay", MODE_PRIVATE)
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val overlayWidth = (screenWidth * 0.46f)
+            .roundToInt()
+            .coerceIn(dp(112), dp(220))
+        val overlayHeight = dp(350)
+
         val params = WindowManager.LayoutParams(
-            dp(88),
-            dp(330),
+            overlayWidth,
+            overlayHeight,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -225,7 +236,9 @@ class TimestampOverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = overlayPrefs.getInt("x", dp(12))
+                .coerceIn(0, (screenWidth - overlayWidth).coerceAtLeast(0))
             y = overlayPrefs.getInt("y", dp(120))
+                .coerceIn(0, (screenHeight - overlayHeight).coerceAtLeast(0))
         }
 
         controls?.layoutParams = params
@@ -257,10 +270,10 @@ class TimestampOverlayService : Service() {
             store.layout.value,
             onSave = { config ->
                 store.setLayout(config)
-                guide.update(config)
+                guide.update(store.layout.value)
                 Toast.makeText(
                     this,
-                    "Layout saved. Yellow lines remain visible.",
+                    "Layout saved. Each yellow line can now be moved and resized independently.",
                     Toast.LENGTH_SHORT
                 ).show()
             },
@@ -324,13 +337,7 @@ class TimestampOverlayService : Service() {
                 main.post { handleSpeech(text, isFinal) }
             },
             onError = { message ->
-                main.post {
-                    Toast.makeText(
-                        this,
-                        message,
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
+                main.post { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
             }
         )
 
@@ -364,7 +371,12 @@ class TimestampOverlayService : Service() {
         val source = lines.joinToString(" ")
         val devanagari = source.count { it in 'ऀ'..'ॿ' }
         val letters = source.count { it.isLetter() }
-        return if (letters > 0 && devanagari.toFloat() / letters.toFloat() > 0.15f) "hi" else "en"
+
+        return if (letters > 0 && devanagari.toFloat() / letters.toFloat() > 0.15f) {
+            "hi"
+        } else {
+            "en"
+        }
     }
 
     private fun startScreenCapture() {
@@ -378,7 +390,9 @@ class TimestampOverlayService : Service() {
         imageReader = reader
 
         reader.setOnImageAvailableListener({ source ->
-            if (!recording || !ocrBusy.compareAndSet(false, true)) return@setOnImageAvailableListener
+            if (!recording || !ocrBusy.compareAndSet(false, true)) {
+                return@setOnImageAvailableListener
+            }
 
             val image = source.acquireLatestImage()
             if (image == null) {
@@ -445,20 +459,20 @@ class TimestampOverlayService : Service() {
 
     private fun handleOcr(words: List<OcrWord>) {
         val config = store.layout.value
+        val screenWidth = resources.displayMetrics.widthPixels.toFloat()
         val screenHeight = resources.displayMetrics.heightPixels.toFloat()
-        val top = config.boxTop * screenHeight
-        val bottom = (config.boxTop + config.boxHeight).coerceAtMost(1f) * screenHeight
-        val gap = (bottom - top) / config.lineCount.coerceAtLeast(1)
-
         val rows = Array(config.lineCount) { ArrayList<OcrWord>() }
 
         for (word in words) {
+            val centerX = (word.left + word.right) / 2f
             val centerY = (word.top + word.bottom) / 2f
-            if (centerY in top..bottom) {
-                val row = ((centerY - top) / gap)
-                    .toInt()
-                    .coerceIn(0, config.lineCount - 1)
-                rows[row].add(word)
+
+            for (index in 0 until config.lineCount) {
+                val rect = lineRect(config, index, screenWidth, screenHeight)
+                if (rect.contains(centerX, centerY)) {
+                    rows[index].add(word)
+                    break
+                }
             }
         }
 
@@ -500,7 +514,7 @@ class TimestampOverlayService : Service() {
         if (discoveredScreenLines.isNotEmpty()) {
             val current = store.scriptLines.value
             if (discoveredScreenLines.size > current.size) {
-                store.replaceScript(discoveredScreenLines.toList())
+                store.replaceScriptPreservingTimestamps(discoveredScreenLines.toList())
             }
         }
     }
@@ -583,10 +597,14 @@ class TimestampOverlayService : Service() {
         val runnable = object : Runnable {
             override fun run() {
                 if (!recording) return
-                val steps = ((store.layout.value.scrollSpeed + 1) / 2).coerceAtLeast(1)
+
+                val steps = ((store.layout.value.scrollSpeed + 1) / 2)
+                    .coerceAtLeast(1)
+
                 repeat(steps) {
                     ScriptAccessibilityService.scrollForward()
                 }
+
                 main.postDelayed(
                     this,
                     (1000L - store.layout.value.scrollSpeed * 90L)
@@ -600,11 +618,14 @@ class TimestampOverlayService : Service() {
     }
 
     private fun isAccessibilityEnabled(): Boolean {
-        val enabled = android.provider.Settings.Secure.getString(
+        val enabled = Settings.Secure.getString(
             contentResolver,
-            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
-        return enabled.split(':').any { it.contains(packageName, ignoreCase = true) }
+
+        return enabled.split(':').any {
+            it.contains(packageName, ignoreCase = true)
+        }
     }
 
     private fun stopAutoScroll() {
@@ -622,6 +643,7 @@ class TimestampOverlayService : Service() {
 
         runCatching { display?.release() }
         display = null
+
         runCatching { imageReader?.close() }
         imageReader = null
 
@@ -679,6 +701,46 @@ class TimestampOverlayService : Service() {
         return (value * resources.displayMetrics.density).roundToInt()
     }
 
+    private fun lineRect(
+        config: LayoutConfig,
+        index: Int,
+        width: Float,
+        height: Float
+    ): RectF {
+        val left = config.boxLeft * width
+        val top = config.boxTop * height
+        val right = (config.boxLeft + config.boxWidth)
+            .coerceAtMost(1f) * width
+        val bottom = (config.boxTop + config.boxHeight)
+            .coerceAtMost(1f) * height
+
+        val boxWidth = right - left
+        val gap = (bottom - top) / config.lineCount.coerceAtLeast(1)
+        val shape = config.lines[index]
+
+        val lineWidth = boxWidth * shape.widthFraction.coerceIn(.4f, 1f)
+        val lineHeight = (gap * 0.72f * shape.heightFraction)
+            .coerceAtMost(gap * 1.5f)
+
+        val centerX = (left + right) / 2f +
+            shape.xOffsetFraction.coerceIn(-.45f, .45f) * boxWidth
+        val centerY = top +
+            gap * (index + 0.5f) +
+            shape.yOffsetFraction.coerceIn(-.45f, .45f) * gap
+
+        val lineLeft = max(left, centerX - lineWidth / 2f)
+        val lineRight = min(right, centerX + lineWidth / 2f)
+        val lineTop = max(top, centerY - lineHeight / 2f)
+        val lineBottom = min(bottom, centerY + lineHeight / 2f)
+
+        return RectF(
+            lineLeft,
+            lineTop,
+            max(lineRight, lineLeft + 1f),
+            max(lineBottom, lineTop + 1f)
+        )
+    }
+
     private class GuideOverlay(
         context: Context,
         private var config: LayoutConfig
@@ -697,7 +759,9 @@ class TimestampOverlayService : Service() {
         private var recording = false
 
         fun update(newConfig: LayoutConfig) {
-            config = newConfig
+            config = newConfig.copy(
+                lines = newConfig.lines.map { it.copy() }.toMutableList()
+            )
             invalidate()
         }
 
@@ -721,25 +785,41 @@ class TimestampOverlayService : Service() {
         }
 
         override fun onDraw(canvas: Canvas) {
-            val width = width.toFloat()
-            val height = height.toFloat()
-            val left = config.boxLeft * width
-            val top = config.boxTop * height
-            val right = (config.boxLeft + config.boxWidth).coerceAtMost(1f) * width
-            val bottom = (config.boxTop + config.boxHeight).coerceAtMost(1f) * height
+            val screenWidth = width.toFloat()
+            val screenHeight = height.toFloat()
+
+            val left = config.boxLeft * screenWidth
+            val top = config.boxTop * screenHeight
+            val right = (config.boxLeft + config.boxWidth)
+                .coerceAtMost(1f) * screenWidth
+            val bottom = (config.boxTop + config.boxHeight)
+                .coerceAtMost(1f) * screenHeight
 
             linePaint.color = Color.YELLOW
             linePaint.strokeWidth = 5f
-            canvas.drawRoundRect(left, top, right, bottom, 14f, 14f, linePaint)
+            canvas.drawRoundRect(
+                left,
+                top,
+                right,
+                bottom,
+                14f,
+                14f,
+                linePaint
+            )
 
-            val gap = (bottom - top) / config.lineCount.coerceAtLeast(1)
             for (index in 0 until config.lineCount) {
-                linePaint.strokeWidth = if (index == currentLine) 7f else 2f
-                canvas.drawLine(
-                    left,
-                    top + gap * (index + 1),
-                    right,
-                    top + gap * (index + 1),
+                val rect = lineRect(config, index, screenWidth, screenHeight)
+                val shape = config.lines[index]
+
+                linePaint.strokeWidth =
+                    if (index == currentLine) 7f else 2f
+                linePaint.color = Color.YELLOW
+
+                val radius = 6f + shape.cornerFraction * 20f
+                canvas.drawRoundRect(
+                    rect,
+                    radius,
+                    radius,
                     linePaint
                 )
             }
@@ -777,76 +857,120 @@ class TimestampOverlayService : Service() {
 
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private var expanded = false
+        private var lastRawX = 0f
         private var lastRawY = 0f
         private var moved = false
 
+        private fun dp(value: Float): Float =
+            value * resources.displayMetrics.density
+
+        private val iconRadius: Float
+            get() = min(
+                width * 0.22f,
+                dp(34f)
+            ).coerceAtLeast(dp(26f))
+
         override fun onDraw(canvas: Canvas) {
+            val centerX = width / 2f
+            val centerY = iconRadius + dp(12f)
+
             paint.color = Color.BLACK
-            canvas.drawCircle(width / 2f, 42f, 31f, paint)
+            canvas.drawCircle(centerX, centerY, iconRadius, paint)
 
             paint.color = Color.WHITE
             paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            paint.textSize = 18f
+            paint.textSize = min(dp(22f), iconRadius * 0.72f)
+
+            val label = "TG"
             canvas.drawText(
-                "TG",
-                width / 2f - 15f,
-                48f,
+                label,
+                centerX - paint.measureText(label) / 2f,
+                centerY - (paint.ascent() + paint.descent()) / 2f,
                 paint
             )
 
             if (expanded) {
-                drawButton(canvas, 82f, "START")
-                drawButton(canvas, 138f, "STOP")
-                drawButton(canvas, 194f, "SAVE")
-                drawButton(canvas, 250f, "SET LINES")
+                val buttonTop = centerY + iconRadius + dp(12f)
+                drawButton(canvas, buttonTop, "START")
+                drawButton(canvas, buttonTop + dp(60f), "STOP")
+                drawButton(canvas, buttonTop + dp(120f), "SAVE")
+                drawButton(canvas, buttonTop + dp(180f), "SET LINES")
             }
         }
 
         private fun drawButton(canvas: Canvas, top: Float, label: String) {
+            val left = dp(8f)
+            val right = width - dp(8f)
+            val bottom = top + dp(50f)
+
             paint.color = Color.BLACK
             canvas.drawRoundRect(
-                3f,
+                left,
                 top,
-                width - 3f,
-                top + 48f,
-                10f,
-                10f,
+                right,
+                bottom,
+                dp(10f),
+                dp(10f),
                 paint
             )
 
             paint.color = Color.WHITE
-            paint.textSize = 12f
-            canvas.drawText(label, 12f, top + 30f, paint)
+            paint.textSize = dp(13f)
+            val textWidth = paint.measureText(label)
+            canvas.drawText(
+                label,
+                (left + right - textWidth) / 2f,
+                top + dp(32f),
+                paint
+            )
         }
 
         override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
+                    lastRawX = event.rawX
                     lastRawY = event.rawY
                     moved = false
                     return true
                 }
 
                 android.view.MotionEvent.ACTION_MOVE -> {
-                    if (!expanded && abs(event.rawY - lastRawY) > 4f) {
+                    if (!expanded &&
+                        (kotlin.math.abs(event.rawX - lastRawX) > dp(8f) ||
+                            kotlin.math.abs(event.rawY - lastRawY) > dp(8f))
+                    ) {
                         moved = true
                         layoutParams?.let { params ->
+                            val screenWidth = resources.displayMetrics.widthPixels
+                            val screenHeight = resources.displayMetrics.heightPixels
+
+                            params.x = (
+                                params.x + (event.rawX - lastRawX).toInt()
+                            ).coerceIn(
+                                0,
+                                (screenWidth - width).coerceAtLeast(0)
+                            )
+
                             params.y = (
                                 params.y + (event.rawY - lastRawY).toInt()
                             ).coerceIn(
                                 0,
-                                (resources.displayMetrics.heightPixels - height)
-                                    .coerceAtLeast(0)
+                                (screenHeight - height).coerceAtLeast(0)
                             )
-                            val prefs =
-                                context.getSharedPreferences("timestamp_genius_overlay", Context.MODE_PRIVATE)
-                            prefs.edit()
+
+                            context.getSharedPreferences(
+                                "timestamp_genius_overlay",
+                                Context.MODE_PRIVATE
+                            ).edit()
                                 .putInt("x", params.x)
                                 .putInt("y", params.y)
                                 .apply()
+
                             val wm =
                                 context.getSystemService(WINDOW_SERVICE) as WindowManager
                             wm.updateViewLayout(this, params)
+
+                            lastRawX = event.rawX
                             lastRawY = event.rawY
                         }
                     }
@@ -856,24 +980,64 @@ class TimestampOverlayService : Service() {
                 android.view.MotionEvent.ACTION_UP -> {
                     if (moved) return true
 
-                    when {
-                        event.y < 75f -> {
-                            expanded = !expanded
-                            invalidate()
+                    val centerX = width / 2f
+                    val centerY = iconRadius + dp(12f)
+
+                    if (distance(event.x, event.y, centerX, centerY) <= iconRadius + dp(12f)) {
+                        expanded = !expanded
+                        invalidate()
+                        performClick()
+                        return true
+                    }
+
+                    if (expanded) {
+                        val buttonTop = centerY + iconRadius + dp(12f)
+                        when {
+                            event.y in buttonTop..(buttonTop + dp(50f)) ->
+                                callbacks.onStart()
+
+                            event.y in
+                                (buttonTop + dp(60f))..(buttonTop + dp(110f)) ->
+                                callbacks.onStop()
+
+                            event.y in
+                                (buttonTop + dp(120f))..(buttonTop + dp(170f)) ->
+                                callbacks.onSave()
+
+                            event.y in
+                                (buttonTop + dp(180f))..(buttonTop + dp(230f)) ->
+                                callbacks.onSetLines()
+
+                            else -> {
+                                expanded = false
+                                invalidate()
+                            }
                         }
 
-                        expanded && event.y in 82f..130f -> callbacks.onStart()
-                        expanded && event.y in 138f..186f -> callbacks.onStop()
-                        expanded && event.y in 194f..242f -> callbacks.onSave()
-                        expanded && event.y in 250f..298f -> callbacks.onSetLines()
+                        performClick()
                     }
-                    expanded = false
-                    invalidate()
+
                     return true
                 }
             }
 
             return true
+        }
+
+        override fun performClick(): Boolean {
+            super.performClick()
+            return true
+        }
+
+        private fun distance(
+            x1: Float,
+            y1: Float,
+            x2: Float,
+            y2: Float
+        ): Float {
+            val dx = x1 - x2
+            val dy = y1 - y2
+            return kotlin.math.sqrt(dx * dx + dy * dy)
         }
     }
 }
