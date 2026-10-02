@@ -2,6 +2,7 @@ package com.timestampgenius
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -11,7 +12,6 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,7 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AlertDialog as ComposeAlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -77,11 +77,16 @@ class MainActivity : ComponentActivity() {
         }
 
     private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            if (pendingStart) {
-                pendingStart = false
-                continueStartFlow()
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            if (!pendingStart) return@registerForActivityResult
+            pendingStart = false
+
+            if (result[Manifest.permission.RECORD_AUDIO] == false) {
+                status = "Audio capture permission was denied. Timestamp Genius needs it for device audio recognition."
+                return@registerForActivityResult
             }
+
+            continueStartFlow()
         }
 
     private val receiver = object : BroadcastReceiver() {
@@ -117,6 +122,18 @@ class MainActivity : ComponentActivity() {
                 )
             ) {
                 MainScreen()
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (Settings.canDrawOverlays(this)) {
+            runCatching {
+                ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, TimestampForegroundService::class.java)
+                )
             }
         }
     }
@@ -197,7 +214,7 @@ class MainActivity : ComponentActivity() {
         }
 
         if (showNewSessionDialog) {
-            AlertDialog(
+            ComposeAlertDialog(
                 onDismissRequest = { showNewSessionDialog = false },
                 title = { Text("New session") },
                 text = {
@@ -233,7 +250,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePdf(uri: Uri) {
-        status = "Reading PDF and detecting yellow separators…"
+        status = "Reading PDF and detecting yellow separators..."
         uiScope.launch {
             val engine = OcrEngine()
             val result = PdfScriptReader(this@MainActivity, engine).extract(uri)
@@ -273,6 +290,7 @@ class MainActivity : ComponentActivity() {
         ) {
             needs += Manifest.permission.RECORD_AUDIO
         }
+
         if (
             android.os.Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
@@ -297,7 +315,7 @@ class MainActivity : ComponentActivity() {
     private fun showLastPdfMenu() {
         val last = store.getLastPdf()
         if (last == null) {
-            Toast.makeText(this, "No PDF recorded yet", Toast.LENGTH_LONG).show()
+            status = "No PDF recorded yet"
             return
         }
 
