@@ -10,7 +10,7 @@ object FuzzyMatcher {
         if (exp.isEmpty() || got.isEmpty()) return 0f
         var cursor = 0
         var matched = 0
-        for (word in got.takeLast(48)) {
+        for (word in got) {
             while (cursor < exp.size && similarity(exp[cursor], word) < 0.68f) cursor++
             if (cursor < exp.size && similarity(exp[cursor], word) >= 0.68f) { matched++; cursor++ }
         }
