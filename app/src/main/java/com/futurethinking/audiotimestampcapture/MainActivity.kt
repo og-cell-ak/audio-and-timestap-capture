@@ -62,8 +62,7 @@ class MainActivity : androidx.activity.ComponentActivity() {
 
                     withContext(Dispatchers.Main) {
                         scriptCountState.value = lines.size
-                        previewState.value = lines.take(3).joinToString("
-") {
+                        previewState.value = lines.take(3).joinToString("\\n") {
                             it.index.toString() + ". " + it.text
                         }
                         statusState.value =
@@ -137,8 +136,7 @@ class MainActivity : androidx.activity.ComponentActivity() {
         previewState.value = if (savedLines.isEmpty()) {
             "No PDF uploaded • screen mode"
         } else {
-            savedLines.take(3).joinToString("
-") {
+            savedLines.take(3).joinToString("\\n") {
                 it.index.toString() + ". " + it.text
             }
         }
