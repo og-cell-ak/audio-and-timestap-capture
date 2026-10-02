@@ -259,6 +259,10 @@ class OverlayController(
         private var spec = store.loadLayout().also { it.normalize() }
         private var selected = 0
         private var handle = -1
+        private var movingBox = false
+        private var movedBox = false
+        private var lastX = 0f
+        private var lastY = 0f
 
         override fun onDraw(c: Canvas) {
             p.style = Paint.Style.FILL
@@ -354,18 +358,39 @@ class OverlayController(
 
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    lastX = e.x
+                    lastY = e.y
+                    movedBox = false
                     handle = handleAt(box, e.x, e.y)
-                    if (handle < 0 && e.y < height - 190f) selected = findLine(e.x, e.y)
+                    movingBox = handle < 0 && box.contains(e.x, e.y)
+                    if (!movingBox && handle < 0 && e.y < height - 190f) {
+                        selected = findLine(e.x, e.y)
+                    }
                     invalidate()
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (handle >= 0) resizeBox(handle, e.x / width, e.y / height)
+                    if (handle >= 0) {
+                        resizeBox(handle, e.x / width, e.y / height)
+                    } else if (movingBox) {
+                        val dx = (e.x - lastX) / width
+                        val dy = (e.y - lastY) / height
+                        if (abs(e.x - lastX) > 3f || abs(e.y - lastY) > 3f) movedBox = true
+                        spec.boxX = (spec.boxX + dx).coerceIn(0f, 1f - spec.boxW)
+                        spec.boxY = (spec.boxY + dy).coerceIn(0f, 1f - spec.boxH)
+                        lastX = e.x
+                        lastY = e.y
+                        spec.normalize()
+                    }
                     invalidate()
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
+                    if (movingBox && !movedBox) {
+                        selected = findLine(e.x, e.y)
+                    }
                     handle = -1
+                    movingBox = false
                     when {
                         e.y in (height - 176f)..(height - 128f) -> applyTopControl(e.x)
                         e.y in (height - 120f)..(height - 72f) -> applyLineControl(e.x)
