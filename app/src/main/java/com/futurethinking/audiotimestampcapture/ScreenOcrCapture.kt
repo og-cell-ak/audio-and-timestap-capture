@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 
@@ -108,9 +109,9 @@ class ScreenOcrCapture(
                 val best=choose(a,h)
                 val words=best?.textBlocks.orEmpty().flatMap{it.lines}.flatMap{it.elements}.mapNotNull{el->
                     val bb=el.boundingBox ?: return@mapNotNull null
-                    WordBox(el.text,l+bb.left,t+bb.top,l+bb.right,t+bb.bottom)
+                    WordBox(el.text,(l+bb.left).toFloat(),(t+bb.top).toFloat(),(l+bb.right).toFloat(),(t+bb.bottom).toFloat())
                 }
-                val text=best?.text?.replace(Regex("\s+")," ")?.trim().orEmpty()
+                val text=best?.text?.replace(Regex("""\s+""")," ")?.trim().orEmpty()
                 result+=ScreenLine(i+1,text,SystemClock.elapsedRealtime()-startElapsed,words)
             } finally { crop.recycle() }
         }
