@@ -238,17 +238,22 @@ class TimestampForegroundService : Service() {
     private fun handleSpeech(text: String, final: Boolean, audioEndMs: Long?) {
         if (!store.isRunning() || text.isBlank()) return
 
+        if (!final) {
+            val partialWords = TextMatching.tokens(text).size
+            recognizedWords = maxOf(recognizedWords, partialWords)
+            overlay?.updateGlowCount(partialWords, text)
+            return
+        }
+
         val lines = store.getLines()
         if (currentLine >= lines.size) return
 
         heardText = (heardText + " " + text).takeLast(1800)
         val expected = lines[currentLine].text
-
-        recognizedWords = maxOf(recognizedWords, TextMatching.tokens(heardText).size)
+        recognizedWords = TextMatching.tokens(heardText).size
 
         val elapsed = SystemClock.elapsedRealtime() - sessionStart
-        val timestamp = (audioEndMs ?: elapsed).coerceAtLeast(0L)
-
+        val timestamp = elapsed.coerceAtLeast(0L)
         val score = TextMatching.score(expected, heardText)
         val complete = TextMatching.completion(expected, heardText)
 
@@ -261,11 +266,12 @@ class TimestampForegroundService : Service() {
             broadcast(
                 "Line " + currentLine + " timestamped at " + format(timestamp) + "."
             )
-        } else if (final && currentLine < lines.size - 1) {
-            val upcoming = lines
-                .drop(currentLine + 1)
-                .take(3)
+            overlay?.updateGlowCount(0, "")
+            return
+        }
 
+        if (currentLine < lines.size - 1) {
+            val upcoming = lines.drop(currentLine + 1).take(3)
             val hit = upcoming.indexOfFirst {
                 TextMatching.score(it.text, text) >= 0.70f
             }
@@ -281,13 +287,9 @@ class TimestampForegroundService : Service() {
             }
         }
 
-        overlay?.updateRecognition(
-            RecognitionSnapshot(
-                lineIndex = currentLine.coerceIn(0, (lines.lastIndex).coerceAtLeast(0)),
-                words = emptyList(),
-                glowCount = recognizedWords,
-                recognizedText = text
-            )
+        overlay?.updateGlowCount(
+            recognizedWords,
+            text
         )
     }
 
