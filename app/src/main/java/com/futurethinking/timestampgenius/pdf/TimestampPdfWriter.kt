@@ -142,7 +142,7 @@ object TimestampPdfWriter {
     ): List<String> {
         val words = text
             .trim()
-            .split(Regex("""\\s+""")
+            .split(Regex("""\s+"""))
             .filter { it.isNotBlank() }
 
         if (words.isEmpty()) return listOf("")
