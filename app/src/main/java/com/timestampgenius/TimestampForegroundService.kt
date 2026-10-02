@@ -142,11 +142,6 @@ class TimestampForegroundService : Service() {
             broadcast("Open START on the main screen first and approve screen capture.")
             return
         }
-        if (store.getLines().isEmpty()) {
-            broadcast("No script lines are loaded. Upload a PDF or place the script inside the yellow box first.")
-            return
-        }
-
         stopRecording()
 
         currentLine = 0
