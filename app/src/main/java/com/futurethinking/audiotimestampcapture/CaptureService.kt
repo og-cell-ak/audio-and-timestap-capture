@@ -57,6 +57,18 @@ class CaptureService:Service(){
     private val lines=mutableListOf<TimedScript>()
     private var currentLine=0
     private val accumulated=StringBuilder()
+    private val scrollHandler=Handler(Looper.getMainLooper())
+    private val scrollRunnable=object:Runnable{
+        override fun run(){
+            if(recording){
+                val speed=layout?.scrollSpeed ?: 0
+                if(speed>0){
+                    ScriptAccessibilityService.scrollForward()
+                    scrollHandler.postDelayed(this,(1900L-(speed*170L)).coerceIn(350L,1900L))
+                }
+            }
+        }
+    }
 
     override fun onCreate(){
         super.onCreate()
@@ -119,6 +131,7 @@ class CaptureService:Service(){
         val expected=SessionStore.loadScript(this)
         val useHindi=expected.any{it.text.any{ch->ch in 'ऀ'..'ॿ'}}
         guide?.apply{layout=l;currentLine=0;currentWordProgress=0;recording=true}
+        startAutoScroll()
         val o=ScreenOcrCapture(this,projection!!,{layout},startElapsed,{screen->
             latestScreenLines=screen
             guide?.lineTexts=screen
@@ -198,6 +211,7 @@ class CaptureService:Service(){
 
     private fun stopRecording(){
         if(!recording)return
+        stopAutoScroll()
         stopSubcomponents()
         recording=false
         guide?.recording=false
@@ -205,6 +219,7 @@ class CaptureService:Service(){
     }
 
     private fun savePdf(){
+        stopAutoScroll()
         stopSubcomponents()
         recording=false
         guide?.recording=false
@@ -225,6 +240,17 @@ class CaptureService:Service(){
         hideAllOverlays()
         projection?.stop();projection=null
         stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
+    }
+
+    private fun startAutoScroll(){
+        scrollHandler.removeCallbacks(scrollRunnable)
+        if((layout?.scrollSpeed ?: 0)>0){
+            scrollHandler.post(scrollRunnable)
+        }
+    }
+
+    private fun stopAutoScroll(){
+        scrollHandler.removeCallbacks(scrollRunnable)
     }
 
     private fun stopSubcomponents(){
@@ -276,6 +302,7 @@ class CaptureService:Service(){
         e.listener={saved->
             layout=saved.normalized()
             SessionStore.saveLayout(this,layout!!)
+            if(recording){startAutoScroll()}
             guide?.layout=layout
             hideEditor()
             sendStatus("LAYOUT SAVED • yellow lines remain visible")
@@ -288,7 +315,7 @@ class CaptureService:Service(){
     private fun removeMenu(){menu?.let{runCatching{wm.removeView(it)}};menu=null}
     private fun hideAllOverlays(){hideEditor();removeMenu();bubble?.let{runCatching{wm.removeView(it)}};bubble=null;guide?.let{runCatching{wm.removeView(it)}};guide=null}
 
-    override fun onDestroy(){stopSubcomponents();hideAllOverlays();runCatching{projection?.stop()};projection=null;super.onDestroy()}
+    override fun onDestroy(){stopAutoScroll();stopSubcomponents();hideAllOverlays();runCatching{projection?.stop()};projection=null;super.onDestroy()}
     override fun onBind(intent:Intent?):IBinder?=null
 
     private fun createChannel(){
