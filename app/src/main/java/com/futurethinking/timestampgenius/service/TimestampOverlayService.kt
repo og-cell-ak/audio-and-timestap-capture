@@ -1,5 +1,5 @@
 package com.futurethinking.timestampgenius.service
-import android.app.*
+import android.app.*\nimport android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
