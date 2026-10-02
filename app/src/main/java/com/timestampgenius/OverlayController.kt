@@ -77,6 +77,14 @@ class OverlayController(
         highlight.invalidate()
     }
 
+    fun updateGlowCount(count: Int, recognizedText: String) {
+        highlight.snapshot = highlight.snapshot.copy(
+            glowCount = count.coerceAtLeast(0),
+            recognizedText = recognizedText
+        )
+        highlight.invalidate()
+    }
+
     fun setAutoStretch(enabled: Boolean) {
         autoStretch = enabled
         highlight.invalidate()
