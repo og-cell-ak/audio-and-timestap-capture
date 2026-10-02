@@ -1,331 +1,312 @@
 package com.futurethinking.audiotimestampcapture
 
-import android.app.*
-import android.content.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
-import android.os.*
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
-import android.view.*
-import android.widget.*
-import java.util.Locale
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import java.util.Locale
 
-class CaptureService : Service() {
-    companion object {
-        const val EXTRA_RESULT_CODE = "result_code"
-        const val EXTRA_RESULT_DATA = "result_data"
-        const val ACTION_STATUS = "capture_status"
-        const val ACTION_PDF_READY = "pdf_ready"
-        const val ACTION_STOP = "stop_capture"
-        const val ACTION_FRESH = "fresh_capture"
-        const val ACTION_START = "start_capture"
-        const val ACTION_SAVE = "save_capture"
-        const val EXTRA_MESSAGE = "message"
-        const val EXTRA_URI = "uri"
+class CaptureService:Service(){
+    companion object{
+        const val EXTRA_RESULT_CODE="result_code"
+        const val EXTRA_RESULT_DATA="result_data"
+        const val ACTION_STATUS="capture_status"
+        const val ACTION_PDF_READY="pdf_ready"
+        const val ACTION_START="start_capture"
+        const val ACTION_STOP="stop_capture"
+        const val ACTION_SAVE="save_capture"
+        const val ACTION_FRESH="fresh_capture"
+        const val EXTRA_MESSAGE="message"
+        const val EXTRA_URI="uri"
+
+        fun stopAndClear(context:Context){
+            context.stopService(Intent(context,CaptureService::class.java))
+        }
     }
 
-    private lateinit var wm: WindowManager
-    private var overlayContext: Context? = null
-    private var bubble: View? = null
-    private var editor: View? = null
-    private var projection: MediaProjection? = null
-    private var ocr: ScreenOcrCapture? = null
-    private var speech: LiveSpeechTimer? = null
-    private var layout: LineLayout? = null
-    private var latestLines: List<ScreenLine> = emptyList()
-    private val matches = mutableListOf<TimedScript>()
-    private var running = false
+    private lateinit var wm:WindowManager
+    private var projection:android.media.projection.MediaProjection?=null
+    private var bubble:TextView?=null
+    private var menu:LinearLayout?=null
+    private var editor:LineLayoutEditorView?=null
+    private var guide:LineGuideView?=null
+    private var ocr:ScreenOcrCapture?=null
+    private var speech:LiveSpeechTimer?=null
+    private var layout:LineLayout?=null
+    private var recording=false
+    private var startElapsed=0L
+    private val lines=mutableListOf<TimedScript>()
+    private var currentLine=0
+    private val accumulated=StringBuilder()
 
-    override fun onCreate() {
+    override fun onCreate(){
         super.onCreate()
-        overlayContext = if (Build.VERSION.SDK_INT >= 30) {
-            val dm = getSystemService(DisplayManager::class.java)
-            val display = dm.getDisplay(Display.DEFAULT_DISPLAY)
-            createDisplayContext(display).createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
-        } else this
-        wm = overlayContext!!.getSystemService(WindowManager::class.java)
+        wm=getSystemService(WINDOW_SERVICE) as WindowManager
         createChannel()
+        layout=SessionStore.loadLayout(this)
     }
 
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel("capture", "Capture", NotificationManager.IMPORTANCE_LOW)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
+        when(intent?.action){
+            ACTION_START->{startRecording();return START_STICKY}
+            ACTION_STOP->{stopRecording();return START_STICKY}
+            ACTION_SAVE->{savePdf();return START_NOT_STICKY}
+            ACTION_FRESH->{stopRecording();lines.clear();currentLine=0;accumulated.clear();layout=SessionStore.loadLayout(this);sendStatus("NEW SESSION READY");return START_STICKY}
         }
+        if(projection==null){
+            val code=intent?.getIntExtra(EXTRA_RESULT_CODE,-1) ?: -1
+            val data=if(Build.VERSION.SDK_INT>=33) intent?.getParcelableExtra(EXTRA_RESULT_DATA,Intent::class.java)
+            else @Suppress("DEPRECATION") intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
+            if(code>0 && data!=null) startProjection(code,data) else {sendStatus("Screen capture permission was not granted");stopSelf()}
+        }
+        return START_STICKY
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_START) { startCaptureListening(); return START_NOT_STICKY }\n        if (intent?.action == ACTION_STOP) { stopListeningOnly(); return START_NOT_STICKY }\n        if (intent?.action == ACTION_SAVE) { savePdfOnly(); return START_NOT_STICKY }\n        when (intent?.action) {
-            ACTION_STOP -> { finishCapture(); return START_NOT_STICKY }
-            ACTION_FRESH -> {
-                matches.clear()
-                latestLines = emptyList()
-                layout = null
-                sendStatus("Fresh session ready")
-                return START_STICKY
-            }
-        }
-
-        if (!running) {
-            startForegroundNotification()
-            val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
-            val data = if (Build.VERSION.SDK_INT >= 33) {
-                intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-            } else {
-                @Suppress("DEPRECATION") intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
-            }
-            if (resultCode == Activity.RESULT_OK && data != null) startCapture(resultCode, data)
-            else { sendStatus("Screen capture permission was not granted"); stopSelf() }
-        }
-        return START_NOT_STICKY
+    private fun startProjection(code:Int,data:Intent){
+        startForegroundNotification()
+        projection=(getSystemService(MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager).getMediaProjection(code,data)
+        if(projection==null){sendStatus("Unable to create screen capture session");stopSelf();return}
+        projection?.registerCallback(object:android.media.projection.MediaProjection.Callback(){
+            override fun onStop(){sendStatus("Screen capture stopped");savePdf()}
+        },Handler(Looper.getMainLooper()))
+        showBubble()
+        showGuide()
+        sendStatus("READY • press SET LINES before START")
     }
 
-    private fun startForegroundNotification() {
-        val notification = NotificationCompat.Builder(this, "capture")
+    private fun startForegroundNotification(){
+        val n=NotificationCompat.Builder(this,"timestamp_genius")
             .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("Audio Timestamp Studio")
-            .setContentText("Screen reading and audio listening are active")
+            .setContentTitle("Timestamp Genius")
+            .setContentText("Device audio and screen timing")
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
-        ServiceCompat.startForeground(
-            this, 77, notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        )
+        val type=ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        ServiceCompat.startForeground(this,77,n,type)
     }
 
-    private fun startCapture(resultCode: Int, data: Intent) {
-        projection = (getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(resultCode, data)
-        if (projection == null) { sendStatus("Unable to create screen capture"); stopSelf(); return }
-        projection!!.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() { sendStatus("Screen capture permission ended"); savePdfOnly() }
-        }, Handler(Looper.getMainLooper()))
-        running = true
-        showBubble()
-        showGuide()
-        sendStatus("READY • set lines, then press START")
+    private fun startRecording(){
+        if(projection==null){sendStatus("START SESSION from the main app first");return}
+        if(recording)return
+        val l=(layout ?: SessionStore.loadLayout(this)).normalized()
+        layout=l
+        if(l.lineCount<1){sendStatus("SET LINES must contain at least one line");return}
+        stopSubcomponents()
+        recording=true
+        currentLine=0
+        accumulated.clear()
+        startElapsed=android.os.SystemClock.elapsedRealtime()
+        val expected=SessionStore.loadScript(this)
+        val useHindi=expected.any{it.text.any{ch->ch in 'ऀ'..'ॿ'}}
+        guide?.apply{layout=l;currentLine=0;currentWordProgress=0;recording=true}
+        val o=ScreenOcrCapture(this,projection!!,{layout},startElapsed,{screen->
+            latestScreenLines=screen
+            guide?.lineTexts=screen
+        },{sendStatus(it)})
+        ocr=o;o.start()
+        val s=LiveSpeechTimer(this,projection!!,useHindi,{_,endMs,words->
+            val progress=if(words.isNotEmpty()) (words.size.coerceAtMost(guideWordCapacity())).coerceAtLeast(0) else 0
+            guide?.currentWordProgress=progress
+        },{segment->handleSpeech(segment,expected)},{sendStatus(it)})
+        speech=s;s.start()
+        sendStatus("STARTED • device audio + screen OCR")
     }
 
-    private fun startCaptureListening() {
-        if (!running) return
-        if (layout == null) { sendStatus("SET LINES and SAVE LAYOUT first"); return }
-        if (ocr != null || speech != null) return
+    private var latestScreenLines:List<ScreenLine> = emptyList()
 
-        ocr = ScreenOcrCapture(this, projection!!, { layout }) { lines ->
-            latestLines = lines
-            guide?.lineTexts = lines
+    private fun handleSpeech(segment:SpokenSegment,expected:List<StoredScriptLine>){
+        val expectedLine=when{
+            expected.isNotEmpty()->expected.getOrNull(currentLine)
+            else->latestScreenLines.firstOrNull{it.index==currentLine+1 && it.text.isNotBlank()}?.let{StoredScriptLine(it.index,it.text)}
         }
-        ocr!!.start()
-
-        val speechLocale = Locale.forLanguageTag("hi-IN")
-
-        speech = LiveSpeechTimer(
-            context = this,
-            projection = projection,
-            locale = speechLocale,
-            onPartial = { text, _ ->
-                val preview = TimestampEngine.match(
-                    latestLines,
-                    SpokenSegment(0L, text, 1f),
-                    emptySet()
-                )
-                guide?.highlightLine = preview?.panelNumber ?: -1
-            },
-            onSegment = { segment ->
-                val used = matches.map { it.panelNumber }.toSet()
-                val match = TimestampEngine.match(latestLines, segment, used)
-                if (match != null && matches.none { it.panelNumber == match.panelNumber }) {
-                    matches.add(match)
-                    guide?.highlightLine = match.panelNumber
-                    sendStatus("MATCHED line " + match.panelNumber + " at " + format(match.timestampMs))
-                }
-            },
-            onStatus = { status -> sendStatus(status) }
-        )
-        speech!!.start()
-        guide?.running = true
-        sendStatus("STARTED • live screen OCR + internal audio reader")
-    }
-
-    private fun stopListeningOnly() {
-        ocr?.stop(); speech?.stop(); ocr = null; speech = null
-        guide?.running = false
-        guide?.highlightLine = -1
-        sendStatus("STOPPED • press START to continue or SAVE to create PDF")
-    }
-
-    private fun savePdfOnly() {
-        ocr?.stop(); speech?.stop(); ocr = null; speech = null
-        val rows = TimestampEngine.ordered(matches)
-        sendStatus("SAVING • creating timestamp PDF")
-        val uri = TimestampPdfWriter.writeToDownloads(this, rows)
-        if (uri != null) {
-            sendBroadcast(Intent(ACTION_PDF_READY).setPackage(packageName).putExtra(EXTRA_URI, uri.toString()))
-            sendStatus("SAVED • PDF is in Downloads/Audio Timestamp Studio")
-        } else {
-            sendStatus("SAVE FAILED • PDF could not be written")
+        val targetText=expectedLine?.text ?: run{
+            sendStatus("Waiting for readable text in line "+(currentLine+1))
+            return
         }
-        hideEditor()
-        bubble?.let { runCatching { wm.removeView(it) } }; bubble = null
-        guide?.let { runCatching { wm.removeView(it) } }; guide = null
-        projection?.stop(); projection = null; running = false
-        stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
-    }
+        if(targetText.startsWith("[unreadable")){sendStatus("Line "+(currentLine+1)+" could not be read");return}
 
-    private fun showBubble() {
-        if (!Settings.canDrawOverlays(this) || bubble != null) return
-        val c = overlayContext ?: this
-        val box = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(6),dp(5),dp(6),dp(5)); setBackgroundColor(0xEE121A2B.toInt()) }
-        fun b(t:String,col:Int,action:()->Unit)=TextView(c).apply {
-            text=t; textSize=12f; setTextColor(if(t=="SET LINES") Color.BLACK else Color.WHITE); gravity=Gravity.CENTER
-            setPadding(dp(9),dp(9),dp(9),dp(9)); background=rounded(col,16f); setOnClickListener{action()}
-        }
-        box.addView(b("START",0xFF20B26B.toInt()){startCaptureListening()}); box.addView(space(4))
-        box.addView(b("STOP",0xFFE53935.toInt()){stopListeningOnly()}); box.addView(space(4))
-        box.addView(b("SAVE",0xFF3F51B5.toInt()){savePdfOnly()}); box.addView(space(4))
-        box.addView(b("SET LINES",0xFFFFC107.toInt()){showEditor()})
-        val p=WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
-        p.gravity=Gravity.TOP or Gravity.END; p.x=dp(8); p.y=dp(70)
-        wm.addView(box,p); bubble=box
-    }
-
-    private fun showGuide() {
-        if (guide != null) return
-        guide = LineGuideView(overlayContext ?: this)
-        guide?.layout = layout
-        val p=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
-        wm.addView(guide,p)
-    }
-
-    private fun showEditor() {
-        if (editor != null) return
-        val c=overlayContext?:this
-        val root=FrameLayout(c)
-        val drawing=LineLayoutEditorView(c)
-        drawing.lineCount=layout?.lineCount?:5
-        root.addView(drawing,FrameLayout.LayoutParams(-1,-1))
-        drawing.post { drawing.setExistingLayout(layout, drawing.width, drawing.height) }
-
-        val panel=LinearLayout(c).apply {
-            orientation=LinearLayout.VERTICAL
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-            setBackgroundColor(0xF5101827.toInt())
-        }
-        panel.addView(TextView(c).apply {
-            text="CUSTOMIZE YELLOW BOX"
-            textSize=18f
-            typeface=Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setPadding(0,0,0,dp(4))
-        })
-        panel.addView(TextView(c).apply {
-            text="Drag inside to MOVE • drag edges/corners to RESIZE"
-            textSize=13f
-            setTextColor(0xFFE1E7F4.toInt())
-            setPadding(0,0,0,dp(8))
-        })
-        val row=LinearLayout(c).apply {
-            orientation=LinearLayout.HORIZONTAL
-            gravity=Gravity.CENTER_VERTICAL
-        }
-        val count=TextView(c).apply {
-            text="LINES: "+drawing.lineCount
-            textSize=16f
-            typeface=Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            gravity=Gravity.CENTER
-        }
-        row.addView(action(c,"−"){ drawing.lineCount--; count.text="LINES: "+drawing.lineCount },
-            LinearLayout.LayoutParams(0,dp(52),1f))
-        row.addView(count,LinearLayout.LayoutParams(dp(120),dp(52)))
-        row.addView(action(c,"+"){ drawing.lineCount++; count.text="LINES: "+drawing.lineCount },
-            LinearLayout.LayoutParams(0,dp(52),1f))
-        panel.addView(row)
-
-        val buttons=LinearLayout(c).apply {
-            orientation=LinearLayout.HORIZONTAL
-            gravity=Gravity.CENTER
-            setPadding(0,dp(8),0,0)
-        }
-        buttons.addView(action(c,"SET LAYOUT / SAVE") {
-            val m=drawing.toLayout(drawing.width,drawing.height)
-            if(m==null) {
-                Toast.makeText(this,"Draw a larger box first",Toast.LENGTH_SHORT).show()
-            } else {
-                layout=m
-                guide?.layout=m
-                hideEditor()
-                sendStatus("LAYOUT SAVED • yellow lines locked on screen")
+        accumulated.append(' ').append(segment.text)
+        val score=similarity(accumulated.toString(),targetText)
+        val exact=progressMatched(targetText,accumulated.toString())
+        if(exact>=FuzzyMatcher.tokens(targetText).size || score>=.72f){
+            val row=TimedScript(segment.endMs,currentLine+1,targetText,(score*.9f+segment.confidence*.1f).coerceIn(0f,1f),true)
+            lines.removeAll{it.lineNumber==currentLine+1}
+            lines.add(row)
+            guide?.currentLine=currentLine
+            sendStatus("LINE "+(currentLine+1)+" COMPLETE • "+format(row.timestampMs ?: 0L))
+            currentLine++
+            accumulated.clear()
+            guide?.currentLine=currentLine.coerceAtMost((layout?.lineCount?:1)-1)
+            guide?.currentWordProgress=0
+            if(currentLine>=(expected.size.takeIf{it>0} ?: layout?.lineCount ?: 0)){
+                sendStatus("SCRIPT COMPLETE • press STOP then SAVE")
             }
-        },LinearLayout.LayoutParams(0,dp(56),1f))
-        buttons.addView(action(c,"CLOSE EDITOR") {
+        } else {
+            val upcoming=findUpcoming(expected,currentLine,segment.text)
+            if(upcoming>currentLine){
+                for(i in currentLine until upcoming) lines.add(TimedScript(null,i+1,expected[i].text,0f,false))
+                currentLine=upcoming
+                accumulated.clear()
+                sendStatus("RESYNCED TO LINE "+(currentLine+1)+" • skipped lines marked not detected")
+            }
+        }
+    }
+
+    private fun findUpcoming(expected:List<StoredScriptLine>,from:Int,text:String):Int{
+        if(expected.isEmpty())return from
+        var best=from;var bestScore=0f
+        for(i in from..minOf(expected.lastIndex,from+3)){
+            val s=similarity(text,expected[i].text)
+            if(s>bestScore){bestScore=s;best=i}
+        }
+        return if(bestScore>=.55f)best else from
+    }
+
+    private fun progressMatched(expected:String,heard:String):Int{
+        val a=FuzzyMatcher.tokens(expected);val b=FuzzyMatcher.tokens(heard);var p=0
+        for(w in b){if(p<a.size && FuzzyMatcher.close(a[p],w))p++}
+        return p
+    }
+
+    private fun similarity(a:String,b:String):Float{
+        val aa=FuzzyMatcher.tokens(a).toSet();val bb=FuzzyMatcher.tokens(b).toSet()
+        if(aa.isEmpty()||bb.isEmpty())return 0f
+        return aa.intersect(bb).size.toFloat()/minOf(aa.size,bb.size).toFloat()
+    }
+
+    private fun guideWordCapacity()=20
+
+    private fun stopRecording(){
+        if(!recording)return
+        stopSubcomponents()
+        recording=false
+        guide?.recording=false
+        sendStatus("STOPPED • timestamps kept in memory")
+    }
+
+    private fun savePdf(){
+        stopSubcomponents()
+        recording=false
+        guide?.recording=false
+        val script=SessionStore.loadScript(this)
+        val rows=if(script.isNotEmpty()){
+            val byLine=lines.associateBy{it.lineNumber}
+            script.map{base->
+                val row=byLine[base.index]
+                TimedScript(row?.timestampMs,base.index,base.text,row?.confidence?:0f,row?.detected==true)
+            }
+        } else lines.toList().sortedBy{it.lineNumber}
+        if(rows.isEmpty()){sendStatus("SAVE FAILED • no script lines or timestamps");return}
+        val uri=TimestampPdfWriter.writeToDownloads(this,rows)
+        if(uri==null){sendStatus("SAVE FAILED • could not create PDF");return}
+        SessionStore.saveLastPdf(this,uri)
+        sendBroadcast(Intent(ACTION_PDF_READY).setPackage(packageName).putExtra(EXTRA_URI,uri.toString()))
+        sendStatus("PDF SAVED • Downloads/ScriptTimestamper")
+        hideAllOverlays()
+        projection?.stop();projection=null
+        stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
+    }
+
+    private fun stopSubcomponents(){
+        runCatching{ocr?.stop()};ocr=null
+        runCatching{speech?.stop()};speech=null
+    }
+
+    private fun showBubble(){
+        if(bubble!=null||!Settings.canDrawOverlays(this))return
+        val b=TextView(this).apply{
+            text="TG";textSize=12f;gravity=Gravity.CENTER;setTextColor(Color.BLACK);setBackgroundColor(Color.YELLOW)
+            setOnClickListener{toggleMenu()}
+            setOnTouchListener(DragListener())
+        }
+        val lp=WindowManager.LayoutParams(64,64,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
+        lp.gravity=Gravity.TOP or Gravity.END;lp.x=10;lp.y=SessionStore.overlayY(this)
+        wm.addView(b,lp);bubble=b
+    }
+
+    private fun toggleMenu(){
+        if(menu!=null){removeMenu();return}
+        val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(8,8,8,8);setBackgroundColor(Color.WHITE)}
+        addMenuButton(panel,"START"){startRecording()}
+        addMenuButton(panel,"STOP"){stopRecording()}
+        addMenuButton(panel,"SAVE"){savePdf()}
+        addMenuButton(panel,"SET LINES"){showEditor()}
+        val lp=WindowManager.LayoutParams(170,250,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT)
+        lp.gravity=Gravity.TOP or Gravity.END;lp.x=85;lp.y=(SessionStore.overlayY(this)+72).coerceAtLeast(72)
+        wm.addView(panel,lp);menu=panel
+    }
+
+    private fun addMenuButton(panel:LinearLayout,label:String,action:()->Unit){
+        val b=TextView(this).apply{text=label;textSize=13f;gravity=Gravity.CENTER;setTextColor(Color.BLACK);setBackgroundColor(Color.YELLOW);setPadding(12,12,12,12);setOnClickListener{removeMenu();action()}}
+        panel.addView(b,LinearLayout.LayoutParams(-1,48).apply{bottomMargin=6})
+    }
+
+    private fun showGuide(){
+        if(guide!=null)return
+        val g=LineGuideView(this);g.layout=layout
+        val lp=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
+        wm.addView(g,lp);guide=g
+    }
+
+    private fun showEditor(){
+        removeMenu()
+        if(editor!=null)return
+        val e=LineLayoutEditorView(this)
+        e.setLayout(layout?:SessionStore.loadLayout(this))
+        e.listener={saved->
+            layout=saved.normalized()
+            SessionStore.saveLayout(this,layout!!)
+            guide?.layout=layout
             hideEditor()
-            sendStatus("EDITOR CLOSED • layout unchanged")
-        },LinearLayout.LayoutParams(0,dp(56),1f))
-        panel.addView(buttons)
-        val top=FrameLayout.LayoutParams(-1,FrameLayout.LayoutParams.WRAP_CONTENT)
-        top.gravity=Gravity.TOP
-        root.addView(panel,top)
-        val lp=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT)
-        wm.addView(root,lp); editor=root
+            sendStatus("LAYOUT SAVED • yellow lines remain visible")
+        }
+        val lp=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT)
+        wm.addView(e,lp);editor=e
     }
 
-    private fun hideEditor() {
-        editor?.let { runCatching { wm.removeView(it) } }
-        editor = null
+    private fun hideEditor(){editor?.let{runCatching{wm.removeView(it)}};editor=null}
+    private fun removeMenu(){menu?.let{runCatching{wm.removeView(it)}};menu=null}
+    private fun hideAllOverlays(){hideEditor();removeMenu();bubble?.let{runCatching{wm.removeView(it)}};bubble=null;guide?.let{runCatching{wm.removeView(it)}};guide=null}
+
+    override fun onDestroy(){stopSubcomponents();hideAllOverlays();runCatching{projection?.stop()};projection=null;super.onDestroy()}
+    override fun onBind(intent:Intent?):IBinder?=null
+
+    private fun createChannel(){
+        if(Build.VERSION.SDK_INT>=26)getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("timestamp_genius","Timestamp Genius",NotificationManager.IMPORTANCE_LOW))
     }
+    private fun sendStatus(s:String)=sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName).putExtra(EXTRA_MESSAGE,s))
+    private fun format(ms:Long)="%02d:%02d:%02d.%03d".format(Locale.US,ms/3600000,(ms%3600000)/60000,(ms%60000)/1000,ms%1000)
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    override fun onDestroy() {
-        hideEditor()
-        bubble?.let { runCatching { wm.removeView(it) } }
-        bubble = null
-        runCatching { ocr?.stop() }
-        runCatching { speech?.stop() }
-        projection?.stop()
-        projection = null
-        running = false
-        super.onDestroy()
-    }
-
-    private fun sendStatus(message: String) {
-        sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName).putExtra(EXTRA_MESSAGE, message))
-    }
-
-    private fun action(c: Context, text: String, click: () -> Unit): TextView = TextView(c).apply {
-        this.text = text
-        textSize = 13f
-        setTextColor(Color.WHITE)
-        gravity = Gravity.CENTER
-        setPadding(dp(12), 0, dp(12), 0)
-        background = rounded(0xFF6C4DFF.toInt(), 18f)
-        setOnClickListener { click() }
-        layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) }
-    }
-
-    private fun rounded(color: Int, radius: Float) = android.graphics.drawable.GradientDrawable().apply {
-        setColor(color); cornerRadius = dp(radius.toInt()).toFloat()
-    }
-
-    private fun space(w: Int) = Space(overlayContext ?: this).apply {
-        layoutParams = LinearLayout.LayoutParams(dp(w), 1)
-    }
-
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt().coerceAtLeast(1)
-    private fun format(ms: Long): String {
-        val m = ms / 60000
-        val s = (ms % 60000) / 1000
-        val x = ms % 1000
-        return "%02d:%02d.%03d".format(m, s, x)
+    private inner class DragListener:View.OnTouchListener{
+        var downX=0f;var downY=0f;var startX=0;var startY=0
+        override fun onTouch(v:View,e:MotionEvent):Boolean{
+            val lp=v.layoutParams as WindowManager.LayoutParams
+            when(e.actionMasked){
+                MotionEvent.ACTION_DOWN->{downX=e.rawX;downY=e.rawY;startX=lp.x;startY=lp.y;return true}
+                MotionEvent.ACTION_MOVE->{lp.x=startX+(e.rawX-downX).toInt();lp.y=(startY+(e.rawY-downY)).toInt().coerceAtLeast(0);wm.updateViewLayout(v,lp);return true}
+                MotionEvent.ACTION_UP->{SessionStore.saveOverlayY(this@CaptureService,lp.y);return true}
+            }
+            return false
+        }
     }
 }
