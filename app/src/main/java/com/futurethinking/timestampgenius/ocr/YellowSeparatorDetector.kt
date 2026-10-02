@@ -1,0 +1,4 @@
+package com.futurethinking.timestampgenius.ocr
+import android.graphics.Bitmap
+object YellowSeparatorDetector{fun findBands(bitmap:Bitmap):List<IntRange>{val out=ArrayList<IntRange>();var start=-1;val step=maxOf(1,bitmap.width/320);for(y in 0 until bitmap.height){var count=0;var x=0;while(x<bitmap.width){val c=bitmap.getPixel(x,y);val r=(c shr 16)and 255;val g=(c shr 8)and 255;val b=c and 255;if(r>205&&g>180&&b<100&&g-b>90&&r-b>100)count++;x+=step};val ratio=count.toFloat()/((bitmap.width+step-1)/step).coerceAtLeast(1);if(ratio>0.55f){if(start<0)start=y}else if(start>=0){if(y-start>=2)out+=start until y;start=-1}};if(start>=0&&bitmap.height-start>=2)out+=start until bitmap.height;return merge(out)}
+private fun merge(v:List<IntRange>):List<IntRange>{if(v.isEmpty())return emptyList();val o=ArrayList<IntRange>();var cur=v[0];for(n in v.drop(1)){if(n.first-cur.last<=3)cur=cur.first..n.last else{o+=cur;cur=n}};o+=cur;return o}}
