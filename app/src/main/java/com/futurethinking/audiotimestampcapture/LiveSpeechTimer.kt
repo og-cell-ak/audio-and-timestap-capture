@@ -1,218 +1,171 @@
 package com.futurethinking.audiotimestampcapture
 
 import android.content.Context
-import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
-import android.os.Build
-import android.os.Bundle
-import android.os.ParcelFileDescriptor
 import android.os.SystemClock
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import java.io.FileOutputStream
-import java.util.Locale
+import com.alphacephei.vosk.Model
+import com.alphacephei.vosk.Recognizer
+import org.json.JSONObject
+import java.io.File
+import java.io.IOException
 
 class LiveSpeechTimer(
-    context: Context,
-    private val projection: MediaProjection?,
-    private val locale: Locale = Locale.forLanguageTag("hi-IN"),
-    private val onPartial: (String, Long) -> Unit,
+    private val context: Context,
+    private val projection: MediaProjection,
+    private val useHindiModel: Boolean,
+    private val onPartial: (String, Long, List<SpokenWord>) -> Unit,
     private val onSegment: (SpokenSegment) -> Unit,
     private val onStatus: (String) -> Unit = {}
 ) {
-    private val appContext = context.applicationContext
-    private var recognizer: SpeechRecognizer? = null
-    private var readFd: ParcelFileDescriptor? = null
-    private var writeFd: ParcelFileDescriptor? = null
-    private var recorder: AudioRecord? = null
-    private var writerThread: Thread? = null
-    private var active = false
-    private var internal = false
-    private var startMs = 0L
+    @Volatile private var active=false
+    private var recorder: AudioRecord?=null
+    private var thread: Thread?=null
+    private var model: Model?=null
+    private var recognizer: Recognizer?=null
+    private var startElapsed=0L
 
     fun start() {
-        if (active) return
-        if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
-            onStatus("Hindi speech recognition is unavailable")
-            return
-        }
-        active = true
-        startMs = SystemClock.elapsedRealtime()
-        if (Build.VERSION.SDK_INT >= 33 && projection != null) startInternal()
-        else startMic()
+        if(active) return
+        active=true
+        startElapsed=SystemClock.elapsedRealtime()
+        thread=Thread { runCapture() }.also { it.start() }
     }
 
-    private fun startInternal() {
+    private fun runCapture() {
         try {
-            val pipe = ParcelFileDescriptor.createPipe()
-            readFd = pipe[0]
-            writeFd = pipe[1]
-            val sr = 16000
-            val fmt = AudioFormat.ENCODING_PCM_16BIT
-            val mask = AudioFormat.CHANNEL_IN_MONO
-            val config = AudioPlaybackCaptureConfiguration.Builder(projection!!)
+            val modelDir=VoskModelFiles.ensure(context,if(useHindiModel) "hi" else "en")
+            model=Model(modelDir.absolutePath)
+            recognizer=Recognizer(model,16000f).apply { setWords(true) }
+
+            val config=AudioPlaybackCaptureConfiguration.Builder(projection)
                 .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
                 .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
                 .build()
-            val min = AudioRecord.getMinBufferSize(sr, mask, fmt)
-            val rec = AudioRecord.Builder()
-                .setAudioFormat(AudioFormat.Builder().setSampleRate(sr).setEncoding(fmt).setChannelMask(mask).build())
-                .setBufferSizeInBytes((min.coerceAtLeast(8192)) * 2)
+
+            val min=AudioRecord.getMinBufferSize(
+                16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT
+            )
+            val rec=AudioRecord.Builder()
+                .setAudioFormat(AudioFormat.Builder()
+                    .setSampleRate(16000)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                    .build())
+                .setBufferSizeInBytes(min.coerceAtLeast(8192)*2)
                 .setAudioPlaybackCaptureConfig(config)
                 .build()
-            if (rec.state != AudioRecord.STATE_INITIALIZED) {
-                rec.release()
-                throw IllegalStateException("AudioPlaybackCapture AudioRecord failed")
-            }
-            recorder = rec
-            internal = true
-            writerThread = Thread {
-                try {
-                    FileOutputStream(writeFd!!.fileDescriptor).use { out ->
-                        val buffer = ByteArray(8192)
-                        rec.startRecording()
-                        onStatus("LIVE • Hindi internal audio reader active")
-                        while (active) {
-                            val n = rec.read(buffer, 0, buffer.size)
-                            if (n > 0) out.write(buffer, 0, n)
-                        }
-                    }
-                } catch (_: Throwable) {
+
+            if(rec.state!=AudioRecord.STATE_INITIALIZED) throw IllegalStateException("Device audio capture is blocked by the source app")
+            recorder=rec
+            onStatus("LISTENING • device playback audio")
+            rec.startRecording()
+            val buffer=ByteArray(8192)
+            while(active) {
+                val n=rec.read(buffer,0,buffer.size)
+                if(n<=0) {
+                    if(n==AudioRecord.ERROR_DEAD_OBJECT) throw IllegalStateException("Device audio capture stopped")
+                    continue
                 }
-            }.also { it.start() }
-            startRecognizer(readFd)
-        } catch (_: Throwable) {
-            cleanupAudio()
-            internal = false
-            onStatus("LIVE • Hindi internal audio unavailable, microphone fallback active")
-            startMic()
+                val r=recognizer ?: continue
+                if(r.acceptWaveForm(buffer,n)) {
+                    emitFinal(r.result)
+                } else {
+                    val partial=parse(r.partialResult)
+                    if(partial.text.isNotBlank()) onPartial(
+                        partial.text,
+                        elapsed(),
+                        partial.words
+                    )
+                }
+            }
+        } catch(t:Throwable) {
+            if(active) onStatus("AUDIO ERROR • "+(t.message ?: "device playback capture unavailable"))
+        } finally {
+            cleanup()
         }
     }
 
-    private fun startMic() {
-        internal = false
-        startRecognizer(null)
-        onStatus("LIVE • Hindi microphone reader active")
+    private fun emitFinal(json:String) {
+        val p=parse(json)
+        if(p.text.isBlank()) return
+        val endRel=p.words.maxOfOrNull { (it.endSec*1000f).toLong() } ?: elapsed()
+        val startRel=p.words.minOfOrNull { (it.startSec*1000f).toLong() } ?: 0L
+        onSegment(
+            SpokenSegment(
+                startMs=startRel.coerceAtLeast(0),
+                endMs=endRel.coerceAtLeast(startRel),
+                text=p.text,
+                words=p.words,
+                confidence=p.words.map{it.confidence}.average().toFloat().takeIf{!it.isNaN()} ?: .8f
+            )
+        )
+        onPartial(p.text,endRel,p.words)
     }
 
-    private fun startRecognizer(source: ParcelFileDescriptor?) {
-        val sr = SpeechRecognizer.createSpeechRecognizer(appContext)
-        recognizer = sr
-        sr.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onPartialResults(results: Bundle?) {
-                hindi(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull())?.let {
-                    onPartial(it, elapsed())
-                }
+    private fun parse(json:String): Parsed {
+        return runCatching {
+            val root=JSONObject(json)
+            val words=mutableListOf<SpokenWord>()
+            val arr=root.optJSONArray("result")
+            if(arr!=null) for(i in 0 until arr.length()) {
+                val o=arr.optJSONObject(i) ?: continue
+                words += SpokenWord(
+                    o.optString("word"),
+                    o.optDouble("start",0.0).toFloat(),
+                    o.optDouble("end",0.0).toFloat(),
+                    o.optDouble("conf",.8).toFloat().coerceIn(0f,1f)
+                )
             }
-            override fun onResults(results: Bundle?) {
-                hindi(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull())?.let {
-                    onSegment(SpokenSegment(elapsed(), it, confidence(results)))
-                    onPartial(it, elapsed())
-                }
-                if (active && !internal) restartMic()
-            }
-            override fun onSegmentResults(results: Bundle) {
-                hindi(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull())?.let {
-                    onSegment(SpokenSegment(elapsed(), it, confidence(results)))
-                    onPartial(it, elapsed())
-                }
-            }
-            override fun onEndOfSegmentedSession() {
-                if (active && internal) restartInternal()
-            }
-            override fun onError(error: Int) {
-                if (!active) return
-                if (internal) restartInternal() else restartMic()
-            }
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            if (Build.VERSION.SDK_INT >= 33 && source != null) {
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source)
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
-                putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
-            }
-        }
-        runCatching { sr.startListening(intent) }.onFailure {
-            if (internal) {
-                runCatching { sr.destroy() }
-                recognizer = null
-                cleanupAudio()
-                internal = false
-                onStatus("LIVE • Hindi recognizer rejected internal source, using microphone")
-                startMic()
-            } else {
-                active = false
-                onStatus("LIVE • Hindi recognizer could not start")
-            }
-        }
+            Parsed(root.optString("text",""),words)
+        }.getOrElse { Parsed("",emptyList()) }
     }
 
-    private fun restartMic() {
-        runCatching { recognizer?.destroy() }
-        recognizer = null
-        if (active) startRecognizer(null)
-    }
-
-    private fun restartInternal() {
-        runCatching { recognizer?.destroy() }
-        recognizer = null
-        cleanupAudio()
-        if (active) startInternal()
-    }
-
-    private fun hindi(value: String?): String? {
-        if (value.isNullOrBlank()) return null
-        val cleaned = value
-            .replace(Regex("[^\\u0900-\\u097F\\u0964\\u0965\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-        return if (cleaned.any { it in '\u0900'..'\u097F' }) cleaned else null
-    }
-
-    private fun confidence(b: Bundle?): Float =
-        b?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull()?.coerceIn(0f,1f) ?: 0.80f
-
-    private fun elapsed(): Long = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(0L)
+    private fun elapsed():Long=(SystemClock.elapsedRealtime()-startElapsed).coerceAtLeast(0L)
 
     fun stop() {
-        active = false
-        runCatching { recognizer?.stopListening() }
-        runCatching { recognizer?.cancel() }
-        runCatching { recognizer?.destroy() }
-        recognizer = null
-        cleanupAudio()
-        internal = false
+        active=false
+        runCatching{recorder?.stop()}
+        thread?.let{runCatching{it.join(1000)}}
+        cleanup()
     }
 
-    private fun cleanupAudio() {
-        runCatching { recorder?.stop() }
-        runCatching { recorder?.release() }
-        recorder = null
-        runCatching { writerThread?.join(600) }
-        writerThread = null
-        runCatching { writeFd?.close() }
-        runCatching { readFd?.close() }
-        writeFd = null
-        readFd = null
+    private fun cleanup() {
+        runCatching{recorder?.release()}
+        recorder=null
+        runCatching{recognizer?.close()}
+        recognizer=null
+        runCatching{model?.close()}
+        model=null
+        thread=null
+    }
+
+    private data class Parsed(val text:String,val words:List<SpokenWord>)
+}
+
+object VoskModelFiles {
+    fun ensure(context:Context,language:String):File {
+        val root=File(context.filesDir,"vosk/$language")
+        if(root.exists() && File(root,"conf/model.conf").exists()) return root
+        root.deleteRecursively()
+        copyAssetTree(context,"models/$language",root)
+        if(!File(root,"conf/model.conf").exists()) throw IOException("Bundled Vosk "+language+" model is missing")
+        return root
+    }
+
+    private fun copyAssetTree(context:Context,assetPath:String,target:File) {
+        target.mkdirs()
+        val names=context.assets.list(assetPath) ?: emptyArray()
+        for(name in names) {
+            val child=assetPath+"/"+name
+            val out=File(target,name)
+            val nested=context.assets.list(child)
+            if(nested!=null && nested.isNotEmpty()) copyAssetTree(context,child,out)
+            else context.assets.open(child).use { input -> out.outputStream().use { output -> input.copyTo(output) } }
+        }
     }
 }
