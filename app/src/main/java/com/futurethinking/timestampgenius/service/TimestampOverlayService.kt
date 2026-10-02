@@ -213,6 +213,7 @@ class TimestampOverlayService : Service() {
             }
         )
 
+        val overlayPrefs = getSharedPreferences("timestamp_genius_overlay", MODE_PRIVATE)
         val params = WindowManager.LayoutParams(
             dp(88),
             dp(330),
@@ -222,8 +223,8 @@ class TimestampOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = dp(12)
-            y = dp(120)
+            x = overlayPrefs.getInt("x", dp(12))
+            y = overlayPrefs.getInt("y", dp(120))
         }
 
         controls?.layoutParams = params
@@ -818,6 +819,12 @@ class TimestampOverlayService : Service() {
                                 (resources.displayMetrics.heightPixels - height)
                                     .coerceAtLeast(0)
                             )
+                            val prefs =
+                                context.getSharedPreferences("timestamp_genius_overlay", Context.MODE_PRIVATE)
+                            prefs.edit()
+                                .putInt("x", params.x)
+                                .putInt("y", params.y)
+                                .apply()
                             val wm =
                                 context.getSystemService(WINDOW_SERVICE) as WindowManager
                             wm.updateViewLayout(this, params)
