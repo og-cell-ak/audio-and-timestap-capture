@@ -468,7 +468,7 @@ class TimestampOverlayService : Service() {
             val centerY = (word.top + word.bottom) / 2f
 
             for (index in 0 until config.lineCount) {
-                val rect = lineRect(config, index, screenWidth, screenHeight)
+                val rect = calculateLineRect(config, index, screenWidth, screenHeight)
                 if (rect.contains(centerX, centerY)) {
                     rows[index].add(word)
                     break
@@ -701,46 +701,6 @@ class TimestampOverlayService : Service() {
         return (value * resources.displayMetrics.density).roundToInt()
     }
 
-    private fun lineRect(
-        config: LayoutConfig,
-        index: Int,
-        width: Float,
-        height: Float
-    ): RectF {
-        val left = config.boxLeft * width
-        val top = config.boxTop * height
-        val right = (config.boxLeft + config.boxWidth)
-            .coerceAtMost(1f) * width
-        val bottom = (config.boxTop + config.boxHeight)
-            .coerceAtMost(1f) * height
-
-        val boxWidth = right - left
-        val gap = (bottom - top) / config.lineCount.coerceAtLeast(1)
-        val shape = config.lines[index]
-
-        val lineWidth = boxWidth * shape.widthFraction.coerceIn(.4f, 1f)
-        val lineHeight = (gap * 0.72f * shape.heightFraction)
-            .coerceAtMost(gap * 1.5f)
-
-        val centerX = (left + right) / 2f +
-            shape.xOffsetFraction.coerceIn(-.45f, .45f) * boxWidth
-        val centerY = top +
-            gap * (index + 0.5f) +
-            shape.yOffsetFraction.coerceIn(-.45f, .45f) * gap
-
-        val lineLeft = max(left, centerX - lineWidth / 2f)
-        val lineRight = min(right, centerX + lineWidth / 2f)
-        val lineTop = max(top, centerY - lineHeight / 2f)
-        val lineBottom = min(bottom, centerY + lineHeight / 2f)
-
-        return RectF(
-            lineLeft,
-            lineTop,
-            max(lineRight, lineLeft + 1f),
-            max(lineBottom, lineTop + 1f)
-        )
-    }
-
     private class GuideOverlay(
         context: Context,
         private var config: LayoutConfig
@@ -808,7 +768,7 @@ class TimestampOverlayService : Service() {
             )
 
             for (index in 0 until config.lineCount) {
-                val rect = lineRect(config, index, screenWidth, screenHeight)
+                val rect = calculateLineRect(config, index, screenWidth, screenHeight)
                 val shape = config.lines[index]
 
                 linePaint.strokeWidth =
@@ -1038,6 +998,45 @@ class TimestampOverlayService : Service() {
             val dx = x1 - x2
             val dy = y1 - y2
             return kotlin.math.sqrt(dx * dx + dy * dy)
+        }
+        private fun calculateLineRect(
+            config: LayoutConfig,
+            index: Int,
+            width: Float,
+            height: Float
+        ): RectF {
+            val left = config.boxLeft * width
+            val top = config.boxTop * height
+            val right = (config.boxLeft + config.boxWidth)
+                .coerceAtMost(1f) * width
+            val bottom = (config.boxTop + config.boxHeight)
+                .coerceAtMost(1f) * height
+
+            val boxWidth = right - left
+            val gap = (bottom - top) / config.lineCount.coerceAtLeast(1)
+            val shape = config.lines[index]
+
+            val lineWidth = boxWidth * shape.widthFraction.coerceIn(.4f, 1f)
+            val lineHeight = (gap * 0.72f * shape.heightFraction)
+                .coerceAtMost(gap * 1.5f)
+
+            val centerX = (left + right) / 2f +
+                shape.xOffsetFraction.coerceIn(-.45f, .45f) * boxWidth
+            val centerY = top +
+                gap * (index + 0.5f) +
+                shape.yOffsetFraction.coerceIn(-.45f, .45f) * gap
+
+            val lineLeft = max(left, centerX - lineWidth / 2f)
+            val lineRight = min(right, centerX + lineWidth / 2f)
+            val lineTop = max(top, centerY - lineHeight / 2f)
+            val lineBottom = min(bottom, centerY + lineHeight / 2f)
+
+            return RectF(
+                lineLeft,
+                lineTop,
+                max(lineRight, lineLeft + 1f),
+                max(lineBottom, lineTop + 1f)
+            )
         }
     }
 }
