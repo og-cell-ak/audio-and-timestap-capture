@@ -7,8 +7,8 @@ import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
 import android.os.SystemClock
-import com.alphacephei.vosk.Model
-import com.alphacephei.vosk.Recognizer
+import org.vosk.Model
+import org.vosk.Recognizer
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
