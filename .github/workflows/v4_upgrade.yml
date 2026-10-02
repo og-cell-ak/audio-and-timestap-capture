@@ -1,4 +1,4 @@
-name: Build upgraded app
+name: Bootstrap Timestamp Genius
 
 on:
   push:
@@ -9,114 +9,25 @@ permissions:
   contents: write
 
 jobs:
-  upgrade:
+  bootstrap:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
-      - name: Apply upgrade
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified Timestamp Genius source
+        shell: bash
         run: |
-          cp upgrade_payload/CaptureService.kt app/src/main/java/com/futurethinking/audiotimestampcapture/CaptureService.kt
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path("app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampEngine.kt")
-          s=p.read_text()
-          if "fun bestLine(" not in s:
-              s=s.replace("    fun ordered(rows: Collection<TimedScript>): List<TimedScript> =", """    fun bestLine(screenLines: List<ScreenLine>, spoken: String, alreadyMatched: Set<Int>): ScreenLine? {
-        val a = normalize(spoken)
-        if (a.isEmpty()) return null
-        var best: ScreenLine? = null
-        var score = 0f
-        for (line in screenLines) {
-            if (line.index in alreadyMatched) continue
-            val x = similarity(a, normalize(line.text))
-            if (x > score) { score=x; best=line }
-        }
-        return if (score >= 0.22f) best else null
-    }
-
-    fun ordered(rows: Collection<TimedScript>): List<TimedScript> =""")
-          p.write_text(s)
-
-          p=Path("app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt")
-          s=p.read_text()
-          s=s.replace("        if (rows.isEmpty() || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null","        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null")
-          s=s.replace('            y = 48f\n        }','            y = 48f\n        }',1)
-          p.write_text(s)
-
-          p=Path("app/src/main/java/com/futurethinking/audiotimestampcapture/LineGuideView.kt")
-          if not p.exists():
-              p.write_text("""package com.futurethinking.audiotimestampcapture
-
-import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.view.View
-
-class LineGuideView(context: Context) : View(context) {
-    private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
-    var layout: LineLayout?=null
-        set(v){field=v;invalidate()}
-    var highlightLine=-1
-        set(v){field=v;invalidate()}
-    var highlightWord=""
-        set(v){field=v;invalidate()}
-    var lineTexts:List<ScreenLine> = emptyList()
-        set(v){field=v;invalidate()}
-
-    override fun onDraw(c:Canvas){
-        val l=layout?:return
-        val left=l.left*width
-        val top=l.top*height
-        val right=l.right*width
-        val bottom=l.bottom*height
-        val gap=(bottom-top)/l.lineCount.coerceAtLeast(1)
-        paint.style=Paint.Style.STROKE
-        paint.strokeWidth=4f
-        paint.color=0xFFFFFF00.toInt()
-        c.drawRect(left,top,right,bottom,paint)
-        paint.strokeWidth=2f
-        paint.color=0xFFFFC107.toInt()
-        for(i in 1 until l.lineCount)c.drawLine(left,top+gap*i,right,top+gap*i,paint)
-        if(highlightLine in 1..l.lineCount && highlightWord.isNotBlank()){
-            val text=lineTexts.firstOrNull{it.index==highlightLine}?.text?:return
-            val words=text.split(Regex("\\s+")).filter{it.isNotBlank()}
-            paint.style=Paint.Style.FILL
-            paint.textSize=(gap*.30f).coerceIn(16f,34f)
-            var x=left+10f
-            val target=highlightWord.lowercase().replace(Regex("[^\\p{L}\\p{N}]"),"")
-            for(word in words){
-                val clean=word.lowercase().replace(Regex("[^\\p{L}\\p{N}]"),"")
-                paint.color=if(clean==target || target.contains(clean) || clean.contains(target))0xFFFFC107.toInt() else 0xFFFFFFFF.toInt()
-                c.drawText(word,x,top+gap*(highlightLine-.32f),paint)
-                x+=paint.measureText(word)+9f
-                if(x>right-10f)break
-            }
-        }
-    }
-}
-""")
-          PY
-      - name: Build and verify
-        run: |
-          gradle testDebugUnitTest assembleDebug
-          unzip -t app/build/outputs/apk/debug/app-debug.apk
-          $ANDROID_HOME/build-tools/35.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package: name=|launchable-activity'
-      - name: Commit generated source changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app
-          git diff --cached --quiet || git commit -m "Prepare v4 build sources"
-          git push
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: audio-timestamp-studio-v4
-          path: app/build/outputs/apk/debug/app-debug.apk
+          set -euo pipefail
+          cat stage/part1.b64 stage/part2.b64 stage/part3.b64 stage/part4.b64 stage/part5.b64 > /tmp/timestamp-genius.b64
+          base64 -d /tmp/timestamp-genius.b64 > /tmp/timestamp-genius.tar.gz
+          git rm -r -f .
+          git clean -fdx
+          tar -xzf /tmp/timestamp-genius.tar.gz --strip-components=1
+          test -f app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampGenius.kt
+          test -f .github/workflows/build.yml
+          git add -A
+          git config user.name "Timestamp Genius Builder"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Build Timestamp Genius project from verified source"
+          git push origin HEAD:main
