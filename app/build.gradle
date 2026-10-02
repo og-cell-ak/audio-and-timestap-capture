@@ -7,6 +7,7 @@ plugins {
 android {
     namespace 'com.timestampgenius'
     compileSdk 35
+
     defaultConfig {
         applicationId 'com.timestampgenius'
         minSdk 29
@@ -14,15 +15,26 @@ android {
         versionCode 1
         versionName '1.0.0'
     }
+
     buildTypes {
-        release { minifyEnabled false; shrinkResources false }
-        debug { minifyEnabled false }
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+        }
     }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = '17' }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
     packaging {
         resources {
             excludes += ['META-INF/AL2.0', 'META-INF/LGPL2.1']
@@ -40,7 +52,10 @@ dependencies {
     implementation 'androidx.compose.ui:ui-tooling-preview'
     implementation 'androidx.compose.material3:material3'
     debugImplementation 'androidx.compose.ui:ui-tooling'
+
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0'
+
     implementation 'com.google.mlkit:text-recognition:16.0.1'
     implementation 'com.google.mlkit:text-recognition-devanagari:16.0.1'
     implementation 'com.alphacephei:vosk-android:0.3.75'
