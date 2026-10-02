@@ -84,47 +84,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          checks = [
-              ("PDF filename", "app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt", "ScriptTimestamps_"),
-              ("PDF folder", "app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt", "ScriptTimestamper"),
-              ("Not detected marker", "app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt", "--:--:--.---"),
-              ("Yellow detector guard", "app/src/main/java/com/futurethinking/audiotimestampcapture/YellowSeparatorDetector.kt", "isEmpty()"),
-              ("PDF yellow guard", "app/src/main/java/com/futurethinking/audiotimestampcapture/PdfScriptParser.kt", "bands.isEmpty()"),
-          ]
-
-          for name, filename, needle in checks:
-              text = Path(filename).read_text(encoding="utf-8")
-              if needle not in text:
-                  raise SystemExit(f"FINAL REVIEW 3 FAILED: {name} missing: {needle}")
-
-          for filename in [
-              "app/src/main/java/com/futurethinking/audiotimestampcapture/PlaybackAudioCapture.kt",
-              "app/src/main/java/com/futurethinking/audiotimestampcapture/MediaFileExporter.kt",
-              "app/src/main/java/com/futurethinking/audiotimestampcapture/PanelReferenceDetector.kt",
-          ]:
-              if Path(filename).exists():
-                  raise SystemExit(f"FINAL REVIEW 3 FAILED: stale helper remains: {filename}")
-
-          source_root = Path("app/src/main")
-          all_source = "
-".join(
-              p.read_text(encoding="utf-8")
-              for p in source_root.rglob("*")
-              if p.is_file() and p.suffix in {".kt", ".xml"}
-          )
-
-          if "android.permission.RECORD_AUDIO" in all_source:
-              raise SystemExit("FINAL REVIEW 3 FAILED: microphone permission found")
-
-          if "com.alphacephei.vosk" in all_source:
-              raise SystemExit("FINAL REVIEW 3 FAILED: obsolete Vosk package found")
-
-          print("FINAL REVIEW 3 PASSED: output format, separator handling, stale helpers and permissions checked")
-          PY
-
+          grep -Fq 'ScriptTimestamps_' app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt
+          grep -Fq 'ScriptTimestamper' app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt
+          grep -Fq -- '--:--:--.---' app/src/main/java/com/futurethinking/audiotimestampcapture/TimestampPdfWriter.kt
+          grep -Fq 'bands.isEmpty()' app/src/main/java/com/futurethinking/audiotimestampcapture/PdfScriptParser.kt
+          grep -Fq 'isEmpty()' app/src/main/java/com/futurethinking/audiotimestampcapture/YellowSeparatorDetector.kt
+          test ! -e app/src/main/java/com/futurethinking/audiotimestampcapture/PlaybackAudioCapture.kt
+          test ! -e app/src/main/java/com/futurethinking/audiotimestampcapture/MediaFileExporter.kt
+          test ! -e app/src/main/java/com/futurethinking/audiotimestampcapture/PanelReferenceDetector.kt
+          if grep -RFq 'android.permission.RECORD_AUDIO' app/src/main; then exit 1; fi
+          if grep -RFq 'com.alphacephei.vosk' app/src/main/java; then exit 1; fi
+          echo 'FINAL REVIEW 3 PASSED'
       - name: Ten full verification passes
         shell: bash
         run: |
