@@ -20,6 +20,12 @@ class UtilityTest {
     }
 
     @Test
+    fun longLineCanReachCompletion() {
+        val expected = (1..80).joinToString(" ") { "word$it" }
+        assertTrue(FuzzyMatcher.progress(expected, expected) > 0.99f)
+    }
+
+    @Test
     fun referenceNumbersAreRemoved() {
         assertEquals("Hello world", ScriptTextCleaner.clean("  [12]. Hello world "))
         assertEquals("Hello world", ScriptTextCleaner.clean("12: Hello world"))
