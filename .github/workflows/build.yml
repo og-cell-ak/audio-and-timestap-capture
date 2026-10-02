@@ -1,6 +1,6 @@
 name: Timestamp Genius APK
 on:
-  push:
+  pull_request:
     branches: [ main ]
   workflow_dispatch:
 permissions:
@@ -28,29 +28,9 @@ jobs:
           unzip -q /tmp/hi.zip -d app/src/main/assets/models
           test -f app/src/main/assets/models/vosk-model-small-en-us-0.15/am/final.mdl
           test -f app/src/main/assets/models/vosk-model-small-hi-0.22/am/final.mdl
-      - name: Verification pass 1
-        run: gradle testDebugUnitTest assembleDebug
-      - name: Verification pass 2
-        run: gradle testDebugUnitTest assembleDebug
-      - name: Verification pass 3
-        run: gradle testDebugUnitTest assembleDebug
-      - name: Verification pass 4
-        run: gradle testDebugUnitTest assembleDebug
-      - name: Verification pass 5
+      - name: Compile and unit verify
         run: gradle testDebugUnitTest assembleDebug
       - name: Verify APK archive
         run: unzip -t app/build/outputs/apk/debug/app-debug.apk
       - name: Verify APK package
-        run: |
-          $ANDROID_HOME/build-tools/35.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package: name=|launchable-activity'
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: timestamp-genius-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-      - name: Publish direct APK release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="timestamp-genius-${GITHUB_SHA:0:12}"
-          gh release create "$TAG" app/build/outputs/apk/debug/app-debug.apk --repo "$GITHUB_REPOSITORY" --title "Timestamp Genius" --notes "Verified Android APK built from the supplied Timestamp Genius specification." --prerelease
+        run: $ANDROID_HOME/build-tools/35.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E 'package: name=|launchable-activity'
